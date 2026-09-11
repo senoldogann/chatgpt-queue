@@ -36,6 +36,7 @@ const pageHtml = `<!doctype html>
       const params = new URLSearchParams(location.search);
       const tabName = params.get('tab') ?? 'default';
       const authenticatedMode = params.get('authenticated') === '1';
+      const transientGapMode = params.get('transient-gap') === '1';
       const storageKey = 'fixture-sends:' + conversationId;
       const composer = document.getElementById('prompt-textarea');
       let send = document.querySelector('[data-testid="send-button"]');
@@ -106,15 +107,26 @@ const pageHtml = `<!doctype html>
 
       document.getElementById('fixture-complete').addEventListener('click', () => {
         document.querySelector('[data-testid="stop-button"], button[aria-label="Stop generating"]')?.remove();
-        composer.disabled = false;
-        composer.value = '';
-        if (authenticatedMode) removeSendControl();
-        else if (send) send.disabled = false;
         responseCount += 1;
         const response = document.createElement('article');
         response.dataset.messageAuthorRole = 'assistant';
         response.textContent = 'assistant response ' + responseCount;
         messages.append(response);
+
+        const restoreComposer = () => {
+          composer.disabled = false;
+          composer.value = '';
+          if (authenticatedMode) removeSendControl();
+          else if (send) send.disabled = false;
+          if (!composer.isConnected) document.getElementById('chat').append(composer);
+        };
+
+        if (transientGapMode) {
+          composer.remove();
+          window.setTimeout(restoreComposer, 100);
+        } else {
+          restoreComposer();
+        }
       });
 
       document.getElementById('fixture-duplicate').addEventListener('click', () => {

@@ -40,8 +40,13 @@ describe('runtime state machine', () => {
     expect(decide('waiting_stable_completion', safe({ assistantMessageCount: 1, domStable: true }), 1, true).action).toBe('wait');
   });
 
+  it('waits through a transient unrecognized DOM until it becomes stable', () => {
+    expect(decide('generating', safe({ domRecognized: false, domStable: false }), 1, true)).toEqual({ action: 'wait' });
+    expect(decide('waiting_stable_completion', safe({ domRecognized: false, domStable: false, assistantMessageCount: 2 }), 1, true)).toEqual({ action: 'wait' });
+  });
+
   it('blocks on ambiguous DOM, confirmation, and explicit blocking errors', () => {
-    expect(decide('generating', safe({ domRecognized: false }), 1, true)).toEqual({ action: 'block', reason: 'dom-unrecognized' });
+    expect(decide('generating', safe({ domRecognized: false, domStable: true }), 1, true)).toEqual({ action: 'block', reason: 'dom-unrecognized' });
     expect(decide('generating', safe({ confirmationVisible: true }), 1, true)).toEqual({ action: 'block', reason: 'confirmation-required' });
     expect(decide('generating', safe({ blockingReason: 'rate-limit' }), 1, true)).toEqual({ action: 'block', reason: 'rate-limit' });
   });

@@ -131,6 +131,23 @@ test('sends through the authenticated composer when send appears only after inpu
   await expect(page.locator('button[aria-label="Send message"]')).toHaveCount(0);
 });
 
+test('waits through a transient unrecognized DOM between queued messages', async ({ extensionContext, extensionWorker }) => {
+  const page = await openFixture(extensionContext, '/c/transient-gap?authenticated=1&transient-gap=1');
+  await addMessage(page, 'transient-first');
+  await addMessage(page, 'transient-second');
+  await startQueue(page);
+
+  await expect.poll(async () => (await sentEvents(page, 'transient-gap')).length).toBe(1);
+  await page.locator('#fixture-complete').click();
+
+  await expect.poll(async () => (await sentEvents(page, 'transient-gap')).length).toBe(2);
+  expect((await sentEvents(page, 'transient-gap')).map((event) => event.content)).toEqual(['transient-first', 'transient-second']);
+  expect((await storedQueue(extensionWorker, 'conv:transient-gap')).status).toBe('running');
+
+  await page.locator('#fixture-complete').click();
+  await expect.poll(async () => (await storedQueue(extensionWorker, 'conv:transient-gap'))?.status).toBe('completed');
+});
+
 test('sends one item at a time and ignores duplicate completion mutations', async ({ extensionContext, extensionWorker }) => {
   const page = await openFixture(extensionContext, '/c/sequence', 'owner');
   await addMessage(page, 'first follow-up');

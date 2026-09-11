@@ -8,7 +8,7 @@ export interface RuntimeEvaluationInput {
 }
 
 const blockReason = (snapshot: PageSnapshot): string | null => {
-  if (!snapshot.domRecognized) return 'dom-unrecognized';
+  if (!snapshot.domRecognized && snapshot.domStable) return 'dom-unrecognized';
   if (snapshot.confirmationVisible) return 'confirmation-required';
   return snapshot.blockingReason;
 };
