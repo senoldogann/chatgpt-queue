@@ -3,13 +3,17 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "bin": {
+    "flowrun": "./dist-cli/flowrun.js"
+  },
   "scripts": {
     "build": "node scripts/build.mjs",
+    "build:cli": "node scripts/build-cli.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:unit": "vitest run tests",
     "test:e2e": "node scripts/build-e2e.mjs && playwright test",
-    "verify": "npm run typecheck && npm test && npm run build"
+    "verify": "npm run typecheck && npm test && npm run build && npm run build:cli"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",
