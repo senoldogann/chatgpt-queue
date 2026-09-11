@@ -21,10 +21,29 @@ describe('generation confirmation', () => {
     await coordinator.start('conv:a', 1);
     const reservation = await coordinator.reserveNext('conv:a', 1, 3);
 
-    const queue = await coordinator.confirmGenerationStarted('conv:a', 1, reservation!.itemId, reservation!.dispatchToken);
+    const queue = await coordinator.confirmGenerationStarted('conv:a', 1, reservation!.itemId, reservation!.dispatchToken, true);
 
     expect(queue.items[0]?.state).toBe('running');
     expect(queue.runtime.phase).toBe('generating');
     expect(queue.runtime.generationObserved).toBe(true);
+  });
+
+  it('keeps generationObserved false when only an assistant placeholder was seen', async () => {
+    let seq = 0;
+    const coordinator = new QueueCoordinator(new QueueRepository(new MemoryStorage()), {
+      now: () => 10,
+      uuid: () => `id-${++seq}`,
+    });
+    await coordinator.ensureQueue('conv:b');
+    await coordinator.add('conv:b', ['one']);
+    await coordinator.claim('conv:b', 1);
+    await coordinator.start('conv:b', 1);
+    const reservation = await coordinator.reserveNext('conv:b', 1, 3);
+
+    const queue = await coordinator.confirmGenerationStarted('conv:b', 1, reservation!.itemId, reservation!.dispatchToken, false);
+
+    expect(queue.items[0]?.state).toBe('running');
+    expect(queue.runtime.phase).toBe('generating');
+    expect(queue.runtime.generationObserved).toBe(false);
   });
 });

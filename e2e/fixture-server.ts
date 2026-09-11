@@ -38,6 +38,7 @@ const pageHtml = `<!doctype html>
       const authenticatedMode = params.get('authenticated') === '1';
       const transientGapMode = params.get('transient-gap') === '1';
       const routeOnSend = params.get('route-on-send');
+      const delayedStopMs = Number(params.get('delayed-stop-ms') ?? '0');
       const storageKey = 'fixture-sends:' + conversationId;
       const composer = document.getElementById('prompt-textarea');
       let send = document.querySelector('[data-testid="send-button"]');
@@ -58,15 +59,25 @@ const pageHtml = `<!doctype html>
       };
 
       const beginGeneration = () => {
-        composer.disabled = true;
+        if (!delayedStopMs) composer.disabled = true;
         if (authenticatedMode) removeSendControl();
         else if (send) send.disabled = true;
-        const stop = document.createElement('button');
-        stop.type = 'button';
-        if (authenticatedMode) stop.setAttribute('aria-label', 'Stop generating');
-        else stop.dataset.testid = 'stop-button';
-        stop.textContent = 'Stop';
-        document.getElementById('chat').append(stop);
+
+        const response = document.createElement('article');
+        response.dataset.messageAuthorRole = 'assistant';
+        response.textContent = 'assistant streaming';
+        messages.append(response);
+
+        const appendStop = () => {
+          const stop = document.createElement('button');
+          stop.type = 'button';
+          if (authenticatedMode) stop.setAttribute('aria-label', 'Stop generating');
+          else stop.dataset.testid = 'stop-button';
+          stop.textContent = 'Stop';
+          document.getElementById('chat').append(stop);
+        };
+        if (delayedStopMs) window.setTimeout(appendStop, delayedStopMs);
+        else appendStop();
       };
 
       const handleSend = () => {
@@ -112,10 +123,14 @@ const pageHtml = `<!doctype html>
       document.getElementById('fixture-complete').addEventListener('click', () => {
         document.querySelector('[data-testid="stop-button"], button[aria-label="Stop generating"]')?.remove();
         responseCount += 1;
-        const response = document.createElement('article');
-        response.dataset.messageAuthorRole = 'assistant';
-        response.textContent = 'assistant response ' + responseCount;
-        messages.append(response);
+        const existingResponse = messages.querySelector('[data-message-author-role="assistant"]:last-child');
+        if (existingResponse) existingResponse.textContent = 'assistant response ' + responseCount;
+        else {
+          const response = document.createElement('article');
+          response.dataset.messageAuthorRole = 'assistant';
+          response.textContent = 'assistant response ' + responseCount;
+          messages.append(response);
+        }
 
         const restoreComposer = () => {
           composer.disabled = false;

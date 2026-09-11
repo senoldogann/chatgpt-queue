@@ -6,7 +6,7 @@ import { evaluateRuntime } from '../domain/state-machine';
 export interface RunnerBackend {
   get(key: string): Promise<ConversationQueue | undefined>;
   reserve(key: string, baselineAssistantCount: number): Promise<DispatchReservation | null>;
-  generationStarted(key: string, itemId: string, dispatchToken: string): Promise<unknown>;
+  generationStarted(key: string, itemId: string, dispatchToken: string, controlObserved: boolean): Promise<unknown>;
   waitingStable(key: string, itemId: string, dispatchToken: string): Promise<unknown>;
   complete(key: string, itemId: string, dispatchToken: string): Promise<unknown>;
   block(key: string, reason: string): Promise<unknown>;
@@ -55,7 +55,7 @@ export class QueueRunner {
     }
 
     if (decision.action === 'generation_started') {
-      await this.backend.generationStarted(key, active.id, active.dispatchToken);
+      await this.backend.generationStarted(key, active.id, active.dispatchToken, decision.controlObserved);
       return;
     }
     if (decision.action === 'wait_for_stability') {

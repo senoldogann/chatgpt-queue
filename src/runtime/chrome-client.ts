@@ -18,8 +18,8 @@ export class ChromeClient implements RunnerBackend {
     return this.request({ type: 'reserve', key, baselineAssistantCount });
   }
 
-  generationStarted(key: string, itemId: string, dispatchToken: string): Promise<ConversationQueue> {
-    return this.request({ type: 'generationStarted', key, itemId, dispatchToken });
+  generationStarted(key: string, itemId: string, dispatchToken: string, controlObserved: boolean): Promise<ConversationQueue> {
+    return this.request({ type: 'generationStarted', key, itemId, dispatchToken, controlObserved });
   }
 
   waitingStable(key: string, itemId: string, dispatchToken: string): Promise<ConversationQueue> {

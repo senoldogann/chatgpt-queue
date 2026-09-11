@@ -11,7 +11,7 @@ export type BackgroundRequest =
   | { type: 'pause'; key: string }
   | { type: 'recover'; key: string }
   | { type: 'reserve'; key: string; baselineAssistantCount: number }
-  | { type: 'generationStarted'; key: string; itemId: string; dispatchToken: string }
+  | { type: 'generationStarted'; key: string; itemId: string; dispatchToken: string; controlObserved: boolean }
   | { type: 'waitingStable'; key: string; itemId: string; dispatchToken: string }
   | { type: 'complete'; key: string; itemId: string; dispatchToken: string }
   | { type: 'block'; key: string; reason: string }

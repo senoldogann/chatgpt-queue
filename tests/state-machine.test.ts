@@ -26,8 +26,16 @@ describe('runtime state machine', () => {
     expect(decide('ready_to_send', safe({ sendControlPresent: false }))).toEqual({ action: 'send' });
   });
 
+  it('treats an assistant placeholder as generation evidence without claiming the control was observed', () => {
+    expect(decide('waiting_generation_start', safe({ assistantMessageCount: 2, isGenerating: false }), 1, false)).toEqual({
+      action: 'generation_started',
+      controlObserved: false,
+    });
+    expect(decide('generating', safe({ assistantMessageCount: 2, isGenerating: false, domStable: true }), 1, false)).toEqual({ action: 'wait' });
+  });
+
   it('recognizes generation start after send', () => {
-    expect(decide('waiting_generation_start', safe({ isGenerating: true }))).toEqual({ action: 'generation_started' });
+    expect(decide('waiting_generation_start', safe({ isGenerating: true }))).toEqual({ action: 'generation_started', controlObserved: true });
   });
 
   it('waits for stable completion after generation ends', () => {

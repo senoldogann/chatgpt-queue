@@ -242,7 +242,7 @@ export class QueueCoordinator {
     });
   }
 
-  async confirmGenerationStarted(key: string, tabId: number, itemId: string, dispatchToken: string): Promise<ConversationQueue> {
+  async confirmGenerationStarted(key: string, tabId: number, itemId: string, dispatchToken: string, controlObserved: boolean): Promise<ConversationQueue> {
     return this.exclusive(async () => {
       const queue = await this.requiredQueue(key);
       this.requireOwner(queue, tabId);
@@ -252,7 +252,7 @@ export class QueueCoordinator {
       const updated: ConversationQueue = {
         ...queue,
         items: queue.items.map((candidate) => candidate.id === itemId ? { ...candidate, state: 'running', startedAt: candidate.startedAt ?? now, updatedAt: now } : candidate),
-        runtime: { ...queue.runtime, phase: 'generating', generationObserved: true },
+        runtime: { ...queue.runtime, phase: 'generating', generationObserved: (queue.runtime.generationObserved ?? false) || controlObserved },
         updatedAt: now,
       };
       await this.repo.put(updated);

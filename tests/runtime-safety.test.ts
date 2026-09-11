@@ -22,7 +22,7 @@ describe('runtime safety', () => {
       snapshot: snapshot({ isGenerating: true }),
       baselineAssistantCount: 1,
       generationObserved: false,
-    })).toEqual({ action: 'generation_started' });
+    })).toEqual({ action: 'generation_started', controlObserved: true });
   });
 
   it('blocks an attempted dispatch after the DOM stabilizes with no send evidence', () => {

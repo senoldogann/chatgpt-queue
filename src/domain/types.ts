@@ -67,7 +67,7 @@ export interface PageSnapshot {
 
 export type RuntimeDecision =
   | { action: 'send' }
-  | { action: 'generation_started' }
+  | { action: 'generation_started'; controlObserved: boolean }
   | { action: 'wait_for_stability' }
   | { action: 'complete' }
   | { action: 'wait' }

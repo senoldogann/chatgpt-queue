@@ -235,6 +235,25 @@ test('refresh recovers an unresolved sending item as uncertain-send without rese
   expect((await storedQueue(extensionWorker, 'conv:refresh')).blockedReason).toBe('uncertain-send');
 });
 
+test('does not reserve the next item while generation control is delayed', async ({ extensionContext, extensionWorker }) => {
+  const page = await openFixture(extensionContext, '/c/delayed-generation?authenticated=1&delayed-stop-ms=1400');
+  await addMessage(page, 'delayed-first');
+  await addMessage(page, 'delayed-second');
+  await startQueue(page);
+
+  await expect.poll(async () => (await sentEvents(page, 'delayed-generation')).length).toBe(1);
+  await page.waitForTimeout(1_150);
+  const queue = await storedQueue(extensionWorker, 'conv:delayed-generation');
+  expect(queue.items).toHaveLength(2);
+  expect(queue.items[1]?.state).toBe('queued');
+  expect(await sentEvents(page, 'delayed-generation')).toHaveLength(1);
+
+  await expect(page.locator('button[aria-label="Stop generating"]')).toHaveCount(1);
+  await page.locator('#fixture-complete').click();
+  await expect.poll(async () => (await sentEvents(page, 'delayed-generation')).length).toBe(2);
+  expect((await sentEvents(page, 'delayed-generation')).map((event) => event.content)).toEqual(['delayed-first', 'delayed-second']);
+});
+
 test('keeps an in-flight new-chat send running when the URL migrates to a conversation', async ({ extensionContext, extensionWorker }) => {
   const page = await openFixture(extensionContext, '/new?authenticated=1&route-on-send=live-route');
   await addMessage(page, 'route-first');
@@ -243,8 +262,16 @@ test('keeps an in-flight new-chat send running when the URL migrates to a conver
 
   await expect.poll(async () => (await sentEvents(page, 'temporary')).length).toBe(1);
   await expect.poll(async () => Boolean(await storedQueue(extensionWorker, 'conv:live-route'))).toBe(true);
-  expect((await storedQueue(extensionWorker, 'conv:live-route')).status).toBe('running');
-  expect((await storedQueue(extensionWorker, 'conv:live-route')).blockedReason).toBeUndefined();
+  const migrated = await storedQueue(extensionWorker, 'conv:live-route');
+  expect(migrated.status).toBe('running');
+  expect(migrated.blockedReason).toBeUndefined();
+  expect(migrated.items).toHaveLength(2);
+  expect(migrated.items.map((item: any) => item.state)).toEqual(['running', 'queued']);
+  await page.waitForTimeout(1_500);
+  const whileGenerating = await storedQueue(extensionWorker, 'conv:live-route');
+  expect(whileGenerating.items).toHaveLength(2);
+  expect(whileGenerating.items[1]?.state).toBe('queued');
+  expect(whileGenerating.status).toBe('running');
 
   await page.locator('#fixture-complete').click();
   await expect.poll(async () => (await sentEvents(page, 'temporary')).length).toBe(2);
