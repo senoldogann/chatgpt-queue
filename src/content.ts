@@ -36,7 +36,12 @@ let panel: QueuePanel;
 
 const render = async (): Promise<ConversationQueue | undefined> => {
   const queue = await client.get(currentKey);
-  if (queue) panel.render(queue, localNotice);
+  if (queue) {
+    const notice = queue.blockedReason === 'dom-unrecognized'
+      ? `DOM diagnostics: ${adapter.getDiagnosticSummary()}`
+      : localNotice;
+    panel.render(queue, notice);
+  }
   return queue;
 };
 

@@ -94,4 +94,21 @@ describe('DOMChatGPTAdapter', () => {
     expect(click).toHaveBeenCalledTimes(1);
     expect(result).toEqual({ attempted: true });
   });
+
+  it('reports bounded DOM diagnostics without reading message text', () => {
+    const adapter = render(`
+      <main>
+        <div id="prompt-textarea" contenteditable="true">private draft text</div>
+        <button data-testid="composer-submit-button" aria-label="Submit prompt">ignored label text</button>
+      </main>`);
+
+    const diagnostics = adapter.getDiagnosticSummary();
+
+    expect(diagnostics).toContain('composer=DIV#prompt-textarea');
+    expect(diagnostics).toContain('contenteditable=true');
+    expect(diagnostics).toContain('send-testid=false');
+    expect(diagnostics).toContain('BUTTON[data-testid=composer-submit-button][aria-label=Submit prompt]');
+    expect(diagnostics).not.toContain('private draft text');
+    expect(diagnostics).not.toContain('ignored label text');
+  });
 });

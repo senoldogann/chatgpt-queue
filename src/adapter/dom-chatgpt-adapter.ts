@@ -39,6 +39,30 @@ const composerReady = (element: Element | null): boolean => {
 
 const normalizedText = (element: Element | null): string => element?.textContent?.trim().toLowerCase() ?? '';
 
+const describeDiagnosticElement = (element: Element | null): string => {
+  if (!element) return 'missing';
+  const id = element.id ? `#${element.id}` : '';
+  const attributes = [
+    ['data-testid', element.getAttribute('data-testid')],
+    ['aria-label', element.getAttribute('aria-label')],
+    ['role', element.getAttribute('role')],
+    ['contenteditable', element.getAttribute('contenteditable')],
+    ['aria-disabled', element.getAttribute('aria-disabled')],
+    ['disabled', element.hasAttribute('disabled') ? 'true' : null],
+  ].filter((entry): entry is [string, string] => entry[1] !== null);
+  return `${element.tagName}${id}${attributes.map(([name, value]) => `[${name}=${value}]`).join('')}`;
+};
+
+const relevantDiagnosticButtons = (document: Document): Element[] =>
+  [...document.querySelectorAll('button')].filter((button) => {
+    const metadata = [
+      button.getAttribute('data-testid'),
+      button.getAttribute('aria-label'),
+      button.getAttribute('title'),
+    ].filter(Boolean).join(' ');
+    return /send|submit|prompt|stop|voice|dictat|microphone|mic|gönder|durdur/i.test(metadata);
+  }).slice(0, 8);
+
 const detectBlockingReason = (document: Document): string | null => {
   const candidates = [...document.querySelectorAll<HTMLElement>('[role="alert"], [data-testid*="error" i], [data-testid="conversation-turn-error"]')];
   const text = candidates.map(normalizedText).join(' ');
@@ -77,6 +101,23 @@ export class DOMChatGPTAdapter implements ChatGPTAdapter {
       confirmationVisible: hasConfirmation(this.document),
       blockingReason,
     };
+  }
+
+
+  getDiagnosticSummary(): string {
+    const composer = first<HTMLElement>(this.document, COMPOSER_SELECTORS);
+    const buttons = relevantDiagnosticButtons(this.document).map(describeDiagnosticElement);
+    return [
+      `composer=${describeDiagnosticElement(composer)}`,
+      `prompt-testid=${Boolean(this.document.querySelector('[data-testid="prompt-textarea"]'))}`,
+      `send-testid=${Boolean(this.document.querySelector('button[data-testid="send-button"]'))}`,
+      `send-aria-en=${Boolean(this.document.querySelector('button[aria-label="Send"]'))}`,
+      `send-aria-tr=${Boolean(this.document.querySelector('button[aria-label="Gönder"]'))}`,
+      `stop-testid=${Boolean(this.document.querySelector('button[data-testid="stop-button"]'))}`,
+      `stop-aria-en=${Boolean(this.document.querySelector('button[aria-label="Stop"]'))}`,
+      `stop-aria-tr=${Boolean(this.document.querySelector('button[aria-label="Durdur"]'))}`,
+      `buttons=${buttons.length ? buttons.join(', ') : 'none'}`,
+    ].join(' | ');
   }
 
   async sendMessage(content: string): Promise<SendResult> {
