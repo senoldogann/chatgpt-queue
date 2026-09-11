@@ -45,6 +45,40 @@ npm run build
 
 The production extension is written to `dist/`.
 
+## FlowRun v0.1 developer runtime
+
+This repository also contains the first slice of **FlowRun**: a local-first, deterministic workflow runtime for AI web workflows. FlowRun is intentionally separate from the live extension dispatch path in v0.1. The goal is to stabilize the workflow format, receipts, assertions, and CLI before connecting it to the browser runtime in v0.2.
+
+Build the CLI:
+
+```bash
+npm run build:cli
+```
+
+Validate a workflow:
+
+```bash
+./dist-cli/flowrun.js validate examples/review-pr.flowrun.json
+```
+
+Dry-run it with explicit inputs:
+
+```bash
+./dist-cli/flowrun.js dry-run examples/review-pr.flowrun.json --input 'diff=example change'
+```
+
+Inspect a serialized FlowRun run:
+
+```bash
+./dist-cli/flowrun.js inspect run.json
+```
+
+FlowRun v0.1 supports versioned JSON workflows, safe `{{ inputs.name }}` / `{{ steps.stepId.output }}` interpolation, deterministic sequential execution, provider-neutral dispatch receipts, fail-closed provider blocking, and output assertions. The core makes no network requests, has no API-key concept, and never evaluates arbitrary template code.
+
+There is deliberately **no live `flowrun run` command yet**. v0.2 will connect the CLI/runtime to this extension's existing fail-closed ChatGPT lifecycle so live browser execution inherits the current reservation, recovery, ownership, and conversation-identity guarantees instead of reimplementing them.
+
+See `docs/superpowers/specs/2026-09-11-flowrun-v0.1-design.md` for the architecture and `examples/review-pr.flowrun.json` for a complete workflow example.
+
 ## Tests
 
 Run unit/integration tests:
@@ -141,8 +175,12 @@ The project does not read browser cookies or credentials, call the OpenAI API, s
 - `src/adapter/` — ChatGPT DOM boundary.
 - `src/runtime/` — extension RPC/client/runner and conversation identity.
 - `src/ui/` — Shadow DOM queue panel.
+- `src/flowrun/` — provider-neutral FlowRun schema, templates, receipts, assertions, engine, and inspection.
+- `src/cli/` — FlowRun CLI commands and Node filesystem adapter.
+- `examples/` — FlowRun workflow examples.
 - `e2e/` — deterministic Chromium extension tests.
 - `scripts/build.mjs` — production build.
+- `scripts/build-cli.mjs` — Node CLI build.
 - `scripts/build-e2e.mjs` — test-only extension build.
 
 ## Verification
@@ -153,5 +191,6 @@ The main local verification sequence is:
 npm test
 npm run typecheck
 npm run build
+npm run build:cli
 npm run test:e2e
 ```

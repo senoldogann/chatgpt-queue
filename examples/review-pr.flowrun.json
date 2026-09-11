@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "name": "review-pr",
+  "inputs": {
+    "diff": {
+      "type": "string",
+      "required": true
+    }
+  },
+  "steps": [
+    {
+      "id": "architecture",
+      "type": "chat",
+      "provider": "chatgpt",
+      "prompt": "Review this change architecturally. Focus on boundaries, coupling, and regression risk.\n\n{{ inputs.diff }}"
+    },
+    {
+      "id": "bugs",
+      "type": "chat",
+      "provider": "chatgpt",
+      "prompt": "Using the architecture review below, identify concrete bugs or missing regression tests.\n\n{{ steps.architecture.output }}",
+      "assert": [
+        {
+          "type": "output_not_empty"
+        }
+      ]
+    }
+  ]
+}
