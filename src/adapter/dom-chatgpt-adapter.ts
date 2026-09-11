@@ -12,7 +12,9 @@ const SEND_SELECTORS = [
 const STOP_SELECTORS = [
   'button[data-testid="stop-button"]',
   'button[aria-label="Stop"]',
+  'button[aria-label="Stop generating"]',
   'button[aria-label="Durdur"]',
+  'button[aria-label="Oluşturmayı durdur"]',
 ];
 
 const COMPOSER_SELECTORS = [

@@ -25,6 +25,19 @@ describe('DOMChatGPTAdapter', () => {
     expect(state.sendControlPresent).toBe(false);
   });
 
+  it('detects the current Turkish generating control', () => {
+    const adapter = render(`
+      <main>
+        <div id="prompt-textarea" contenteditable="true"></div>
+        <button aria-label="Oluşturmayı durdur"></button>
+      </main>`);
+
+    const state = adapter.getState(false);
+    expect(state.domRecognized).toBe(true);
+    expect(state.isGenerating).toBe(true);
+    expect(state.sendControlPresent).toBe(false);
+  });
+
   it('detects a usable send button and enabled composer', () => {
     const adapter = render(`
       <main>
