@@ -84,7 +84,7 @@ describe('QueuePanel', () => {
     panel.render(completed);
 
     const rerenderedInput = host.shadowRoot!.querySelector<HTMLTextAreaElement>('[data-role="new-message"]')!;
-    expect(rerenderedInput).not.toBe(firstInput);
+    expect(rerenderedInput).toBe(firstInput);
     expect(rerenderedInput.value).toBe('follow-up after completion');
     expect(host.shadowRoot!.activeElement).toBe(rerenderedInput);
     expect(rerenderedInput.selectionStart).toBe(9);
@@ -95,6 +95,74 @@ describe('QueuePanel', () => {
 
     expect(add).toHaveBeenCalledWith('follow-up after completion');
     expect(host.shadowRoot!.querySelector<HTMLTextAreaElement>('[data-role="new-message"]')!.value).toBe('');
+  });
+
+  it('keeps all interactive controls mounted when the visible queue state has not changed', async () => {
+    const start = vi.fn();
+    const edit = vi.fn();
+    const remove = vi.fn();
+    const reorder = vi.fn();
+    const host = document.createElement('div');
+    document.body.append(host);
+    const panel = new QueuePanel(host, { start, edit, remove, reorder });
+    const idle: ConversationQueue = {
+      ...sampleQueue(),
+      status: 'idle',
+      items: sampleQueue().items.map((item, index) => index === 2 ? { ...item, state: 'queued' as const } : { ...item, state: 'completed' as const }),
+      runtime: { phase: 'idle' },
+    };
+
+    panel.render(idle);
+    const root = host.shadowRoot!;
+    const controls = {
+      start: root.querySelector<HTMLButtonElement>('[data-action="start"]')!,
+      up: root.querySelector<HTMLButtonElement>('[data-action="up"]')!,
+      down: root.querySelector<HTMLButtonElement>('[data-action="down"]')!,
+      save: root.querySelector<HTMLButtonElement>('[data-action="save"]')!,
+      delete: root.querySelector<HTMLButtonElement>('[data-action="delete"]')!,
+    };
+    root.querySelector<HTMLTextAreaElement>('[data-item-id="wait"]')!.value = 'Run stable tests';
+
+    panel.render({ ...idle, owner: { tabId: 1, leaseId: 'lease', heartbeatAt: 10, expiresAt: 20 }, updatedAt: idle.updatedAt + 10 });
+
+    expect(root.querySelector('[data-action="start"]')).toBe(controls.start);
+    expect(root.querySelector('[data-action="up"]')).toBe(controls.up);
+    expect(root.querySelector('[data-action="down"]')).toBe(controls.down);
+    expect(root.querySelector('[data-action="save"]')).toBe(controls.save);
+    expect(root.querySelector('[data-action="delete"]')).toBe(controls.delete);
+
+    controls.start.click();
+    controls.up.click();
+    controls.down.click();
+    controls.save.click();
+    controls.delete.click();
+    await Promise.resolve();
+
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(reorder).toHaveBeenNthCalledWith(1, 'wait', -1);
+    expect(reorder).toHaveBeenNthCalledWith(2, 'wait', 1);
+    expect(edit).toHaveBeenCalledWith('wait', 'Run stable tests');
+    expect(remove).toHaveBeenCalledWith('wait');
+  });
+
+  it('hides to a right-edge tab and restores without rebuilding the queue', () => {
+    sessionStorage.removeItem('chatgpt-queue:panel-collapsed');
+    const host = document.createElement('div');
+    document.body.append(host);
+    const panel = new QueuePanel(host, {});
+    panel.render(sampleQueue());
+    const root = host.shadowRoot!;
+    const firstPanel = root.querySelector('.panel');
+
+    root.querySelector<HTMLButtonElement>('[data-action="hide"]')!.click();
+    expect(root.querySelector('.dock')?.classList.contains('collapsed')).toBe(true);
+    expect(sessionStorage.getItem('chatgpt-queue:panel-collapsed')).toBe('1');
+    expect(root.querySelector('.panel')).toBe(firstPanel);
+
+    root.querySelector<HTMLButtonElement>('[data-action="show"]')!.click();
+    expect(root.querySelector('.dock')?.classList.contains('collapsed')).toBe(false);
+    expect(sessionStorage.getItem('chatgpt-queue:panel-collapsed')).toBe('0');
+    expect(root.querySelector('.panel')).toBe(firstPanel);
   });
 
   it('shows a blocked reason', () => {

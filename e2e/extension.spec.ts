@@ -177,6 +177,55 @@ test('preserves add-input focus and draft after completion while ChatGPT DOM mut
   expect((await storedQueue(extensionWorker, 'conv:post-completion-focus')).status).toBe('idle');
 });
 
+test('keeps start edit reorder delete and hide/show controls stable during ChatGPT DOM mutations', async ({ extensionContext, extensionWorker }) => {
+  const page = await openFixture(extensionContext, '/c/control-stability');
+  await addMessage(page, 'alpha');
+  await addMessage(page, 'beta');
+  await addMessage(page, 'gamma');
+
+  const initial = await storedQueue(extensionWorker, 'conv:control-stability');
+  const alphaId = initial.items[0].id;
+  const gammaId = initial.items[2].id;
+  const root = queueRoot(page);
+
+  await page.evaluate(() => {
+    const host = document.querySelector('#chatgpt-queue-extension-root') as HTMLElement | null;
+    const start = host?.shadowRoot?.querySelector<HTMLButtonElement>('[data-action="start"]');
+    if (start) start.dataset.stabilityToken = 'keep';
+    document.body.append(document.createElement('span'));
+  });
+  await page.waitForTimeout(120);
+  await expect(root.locator('[data-action="start"]')).toHaveAttribute('data-stability-token', 'keep');
+
+  await root.locator(`[data-action="down"][data-id="${alphaId}"]`).click();
+  await expect.poll(async () => (await storedQueue(extensionWorker, 'conv:control-stability')).items.filter((item: any) => item.state === 'queued').map((item: any) => item.content).join('|')).toBe('beta|alpha|gamma');
+
+  const alphaInput = root.locator(`textarea[data-item-id="${alphaId}"]`);
+  await alphaInput.fill('alpha edited');
+  await page.evaluate(() => document.body.append(document.createElement('i')));
+  await page.waitForTimeout(80);
+  await root.locator(`[data-action="save"][data-id="${alphaId}"]`).click();
+  await expect.poll(async () => (await storedQueue(extensionWorker, 'conv:control-stability')).items.find((item: any) => item.id === alphaId)?.content).toBe('alpha edited');
+
+  await root.locator(`[data-action="up"][data-id="${alphaId}"]`).click();
+  await expect.poll(async () => (await storedQueue(extensionWorker, 'conv:control-stability')).items.filter((item: any) => item.state === 'queued').map((item: any) => item.content).join('|')).toBe('alpha edited|beta|gamma');
+
+  await page.evaluate(() => document.body.append(document.createElement('b')));
+  await root.locator(`[data-action="delete"][data-id="${gammaId}"]`).click();
+  await expect.poll(async () => (await storedQueue(extensionWorker, 'conv:control-stability')).items.some((item: any) => item.id === gammaId)).toBe(false);
+
+  await root.locator('[data-action="hide"]').click();
+  await expect(root.locator('.dock')).toHaveClass(/collapsed/);
+  await root.locator('[data-action="show"]').click();
+  await expect(root.locator('.dock')).not.toHaveClass(/collapsed/);
+
+  await page.evaluate(() => document.body.append(document.createElement('em')));
+  await page.waitForTimeout(80);
+  await root.locator('[data-action="start"]').click();
+  await expect.poll(async () => (await sentEvents(page, 'control-stability')).length).toBe(1);
+  expect((await sentEvents(page, 'control-stability'))[0]?.content).toBe('alpha edited');
+});
+
 test('sends one item at a time and ignores duplicate completion mutations', async ({ extensionContext, extensionWorker }) => {
   const page = await openFixture(extensionContext, '/c/sequence', 'owner');
   await addMessage(page, 'first follow-up');
