@@ -235,6 +235,22 @@ test('refresh recovers an unresolved sending item as uncertain-send without rese
   expect((await storedQueue(extensionWorker, 'conv:refresh')).blockedReason).toBe('uncertain-send');
 });
 
+test('keeps an in-flight new-chat send running when the URL migrates to a conversation', async ({ extensionContext, extensionWorker }) => {
+  const page = await openFixture(extensionContext, '/new?authenticated=1&route-on-send=live-route');
+  await addMessage(page, 'route-first');
+  await addMessage(page, 'route-second');
+  await startQueue(page);
+
+  await expect.poll(async () => (await sentEvents(page, 'temporary')).length).toBe(1);
+  await expect.poll(async () => Boolean(await storedQueue(extensionWorker, 'conv:live-route'))).toBe(true);
+  expect((await storedQueue(extensionWorker, 'conv:live-route')).status).toBe('running');
+  expect((await storedQueue(extensionWorker, 'conv:live-route')).blockedReason).toBeUndefined();
+
+  await page.locator('#fixture-complete').click();
+  await expect.poll(async () => (await sentEvents(page, 'temporary')).length).toBe(2);
+  expect((await sentEvents(page, 'temporary')).map((event) => event.content)).toEqual(['route-first', 'route-second']);
+});
+
 test('migrates a temporary new-chat queue to the real conversation key', async ({ extensionContext, extensionWorker }) => {
   const page = await openFixture(extensionContext, '/new');
   await addMessage(page, 'survive identity migration');

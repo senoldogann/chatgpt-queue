@@ -37,6 +37,7 @@ const pageHtml = `<!doctype html>
       const tabName = params.get('tab') ?? 'default';
       const authenticatedMode = params.get('authenticated') === '1';
       const transientGapMode = params.get('transient-gap') === '1';
+      const routeOnSend = params.get('route-on-send');
       const storageKey = 'fixture-sends:' + conversationId;
       const composer = document.getElementById('prompt-textarea');
       let send = document.querySelector('[data-testid="send-button"]');
@@ -79,6 +80,9 @@ const pageHtml = `<!doctype html>
           return;
         }
         beginGeneration();
+        if (routeOnSend && location.pathname === '/new') {
+          history.pushState({}, '', '/c/' + routeOnSend);
+        }
       };
 
       const bindSend = (button) => button.addEventListener('click', handleSend);

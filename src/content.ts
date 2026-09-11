@@ -71,7 +71,12 @@ const syncIdentity = async (): Promise<void> => {
 
   if (previousKey.startsWith('temp:') && nextKey.startsWith('conv:')) {
     try {
-      await client.request({ type: 'migrate', fromKey: previousKey, toKey: nextKey });
+      const migrated = await client.request<ConversationQueue>({ type: 'migrate', fromKey: previousKey, toKey: nextKey });
+      if (migrated.status === 'running' || migrated.status === 'paused') {
+        if (!await claimCurrent()) return;
+      }
+      await render();
+      return;
     } catch (error) {
       localNotice = `Queue migration stopped: ${error instanceof Error ? error.message : String(error)}`;
       await ensureCurrent();
