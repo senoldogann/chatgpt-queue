@@ -148,6 +148,35 @@ test('waits through a transient unrecognized DOM between queued messages', async
   await expect.poll(async () => (await storedQueue(extensionWorker, 'conv:transient-gap'))?.status).toBe('completed');
 });
 
+test('preserves add-input focus and draft after completion while ChatGPT DOM mutates', async ({ extensionContext, extensionWorker }) => {
+  const page = await openFixture(extensionContext, '/c/post-completion-focus');
+  await addMessage(page, 'initial message');
+  await startQueue(page);
+  await expect.poll(async () => (await sentEvents(page, 'post-completion-focus')).length).toBe(1);
+  await page.locator('#fixture-complete').click();
+  await expect.poll(async () => (await storedQueue(extensionWorker, 'conv:post-completion-focus'))?.status).toBe('completed');
+
+  const input = queueRoot(page).locator('textarea[data-role="new-message"]');
+  await input.fill('added after completion');
+  await input.focus();
+  await page.evaluate(() => {
+    const marker = document.createElement('span');
+    marker.textContent = 'background ChatGPT mutation';
+    document.body.append(marker);
+  });
+  await page.waitForTimeout(150);
+
+  await expect(input).toHaveValue('added after completion');
+  expect(await page.evaluate(() => {
+    const host = document.querySelector('#chatgpt-queue-extension-root') as HTMLElement | null;
+    return (host?.shadowRoot?.activeElement as HTMLElement | null)?.dataset.role ?? null;
+  })).toBe('new-message');
+
+  await queueRoot(page).locator('button[data-action="add"]').click();
+  await expect(queueRoot(page).locator('li.item').filter({ hasText: 'added after completion' })).toBeVisible();
+  expect((await storedQueue(extensionWorker, 'conv:post-completion-focus')).status).toBe('idle');
+});
+
 test('sends one item at a time and ignores duplicate completion mutations', async ({ extensionContext, extensionWorker }) => {
   const page = await openFixture(extensionContext, '/c/sequence', 'owner');
   await addMessage(page, 'first follow-up');

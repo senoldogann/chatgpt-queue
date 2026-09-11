@@ -63,6 +63,40 @@ describe('QueuePanel', () => {
     expect(reorder).toHaveBeenCalledWith('wait', -1);
   });
 
+  it('preserves a focused new-message draft across rerenders and clears it after a successful add', async () => {
+    const add = vi.fn(async () => undefined);
+    const host = document.createElement('div');
+    document.body.append(host);
+    const panel = new QueuePanel(host, { add });
+    const completed: ConversationQueue = {
+      ...sampleQueue(),
+      status: 'completed',
+      items: sampleQueue().items.map((item) => ({ ...item, state: 'completed' as const })),
+      runtime: { phase: 'idle' },
+    };
+
+    panel.render(completed);
+    const firstInput = host.shadowRoot!.querySelector<HTMLTextAreaElement>('[data-role="new-message"]')!;
+    firstInput.value = 'follow-up after completion';
+    firstInput.focus();
+    firstInput.setSelectionRange(9, 9);
+
+    panel.render(completed);
+
+    const rerenderedInput = host.shadowRoot!.querySelector<HTMLTextAreaElement>('[data-role="new-message"]')!;
+    expect(rerenderedInput).not.toBe(firstInput);
+    expect(rerenderedInput.value).toBe('follow-up after completion');
+    expect(host.shadowRoot!.activeElement).toBe(rerenderedInput);
+    expect(rerenderedInput.selectionStart).toBe(9);
+
+    host.shadowRoot!.querySelector<HTMLButtonElement>('[data-action="add"]')!.click();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(add).toHaveBeenCalledWith('follow-up after completion');
+    expect(host.shadowRoot!.querySelector<HTMLTextAreaElement>('[data-role="new-message"]')!.value).toBe('');
+  });
+
   it('shows a blocked reason', () => {
     const host = document.createElement('div');
     const panel = new QueuePanel(host, {});

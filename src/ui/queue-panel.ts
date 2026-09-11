@@ -29,12 +29,34 @@ const stateMark = (item: QueueItem): string => {
 
 export class QueuePanel {
   private readonly root: ShadowRoot;
+  private lastConversationKey?: string;
 
   constructor(private readonly host: HTMLElement, private readonly actions: QueuePanelActions) {
     this.root = host.shadowRoot ?? host.attachShadow({ mode: 'open' });
   }
 
   render(queue: ConversationQueue, notice?: string): void {
+    const sameConversation = this.lastConversationKey === queue.conversationKey;
+    const existingNewMessage = sameConversation
+      ? this.root.querySelector<HTMLTextAreaElement>('[data-role="new-message"]')
+      : null;
+    const newMessageDraft = existingNewMessage?.value ?? '';
+    const queuedDrafts = new Map<string, string>();
+    if (sameConversation) {
+      for (const input of this.root.querySelectorAll<HTMLTextAreaElement>('textarea[data-item-id]')) {
+        if (input.dataset.itemId) queuedDrafts.set(input.dataset.itemId, input.value);
+      }
+    }
+
+    const active = sameConversation ? this.root.activeElement : null;
+    const focusedNewMessage = active instanceof HTMLTextAreaElement && active.dataset.role === 'new-message';
+    const focusedItemId = active instanceof HTMLTextAreaElement ? active.dataset.itemId : undefined;
+    const selectionStart = active instanceof HTMLTextAreaElement ? active.selectionStart : null;
+    const selectionEnd = active instanceof HTMLTextAreaElement ? active.selectionEnd : null;
+    const detailsWasOpen = sameConversation
+      ? (this.root.querySelector<HTMLDetailsElement>('details')?.open ?? true)
+      : true;
+
     const pending = queue.items.filter((item) => item.state === 'queued').length;
     const control = queue.status === 'running'
       ? '<button data-action="pause">Pause</button>'
@@ -96,7 +118,7 @@ export class QueuePanel {
         .empty { color: #aaa; padding: 6px 0; }
       </style>
       <div class="wrap">
-        <details open>
+        <details${detailsWasOpen ? ' open' : ''}>
           <summary><span>Queue · ${pending}</span><span class="status">${statusLabel(queue.status)}</span></summary>
           <div class="body">
             <div class="controls">${control}</div>
@@ -108,7 +130,29 @@ export class QueuePanel {
         </details>
       </div>`;
 
+    if (sameConversation) {
+      const newMessage = this.root.querySelector<HTMLTextAreaElement>('[data-role="new-message"]');
+      if (newMessage) newMessage.value = newMessageDraft;
+      for (const input of this.root.querySelectorAll<HTMLTextAreaElement>('textarea[data-item-id]')) {
+        const itemId = input.dataset.itemId;
+        if (itemId && queuedDrafts.has(itemId)) input.value = queuedDrafts.get(itemId)!;
+      }
+    }
+
     this.bind(queue);
+    this.lastConversationKey = queue.conversationKey;
+
+    const focusTarget = focusedNewMessage
+      ? this.root.querySelector<HTMLTextAreaElement>('[data-role="new-message"]')
+      : focusedItemId
+        ? this.root.querySelector<HTMLTextAreaElement>(`textarea[data-item-id="${CSS.escape(focusedItemId)}"]`)
+        : null;
+    if (focusTarget) {
+      focusTarget.focus();
+      if (selectionStart !== null && selectionEnd !== null) {
+        focusTarget.setSelectionRange(selectionStart, selectionEnd);
+      }
+    }
   }
 
   private bind(queue: ConversationQueue): void {
@@ -119,7 +163,15 @@ export class QueuePanel {
     this.root.querySelector<HTMLButtonElement>('[data-action="add"]')?.addEventListener('click', () => {
       const input = this.root.querySelector<HTMLTextAreaElement>('[data-role="new-message"]');
       const content = input?.value.trim() ?? '';
-      if (content && this.actions.add) invoke(() => this.actions.add!(content));
+      if (!content || !this.actions.add || !input) return;
+      const originalDraft = input.value;
+      input.value = '';
+      void Promise.resolve()
+        .then(() => this.actions.add!(content))
+        .catch(() => {
+          const currentInput = this.root.querySelector<HTMLTextAreaElement>('[data-role="new-message"]');
+          if (currentInput && !currentInput.value) currentInput.value = originalDraft;
+        });
     });
     this.root.querySelector('[data-action="start"]')?.addEventListener('click', () => invoke(this.actions.start));
     this.root.querySelector('[data-action="pause"]')?.addEventListener('click', () => invoke(this.actions.pause));
