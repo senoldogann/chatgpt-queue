@@ -1,0 +1,139 @@
+import { createServer, type Server } from 'node:http';
+
+export interface FixtureServer {
+  origin: string;
+  close(): Promise<void>;
+}
+
+const pageHtml = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>ChatGPT Queue E2E Fixture</title>
+  <style>
+    body { font-family: sans-serif; margin: 24px; }
+    #fixture-controls { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+    #chat { display: grid; gap: 10px; max-width: 680px; }
+    #prompt-textarea { min-height: 80px; }
+  </style>
+</head>
+<body>
+  <div id="fixture-controls">
+    <button id="fixture-complete" type="button">Complete generation</button>
+    <button id="fixture-duplicate" type="button">Duplicate completion mutation</button>
+    <button id="fixture-error" type="button">Show network error</button>
+    <button id="fixture-confirmation" type="button">Show confirmation</button>
+    <button id="fixture-uncertain" type="button">Next send uncertain</button>
+  </div>
+  <main id="chat">
+    <div id="messages"></div>
+    <textarea id="prompt-textarea"></textarea>
+    <button data-testid="send-button" type="button">Send</button>
+  </main>
+  <script>
+    (() => {
+      const conversationId = location.pathname.match(/(?:^|\\/)c\\/([^/]+)/)?.[1] ?? 'temporary';
+      const tabName = new URLSearchParams(location.search).get('tab') ?? 'default';
+      const storageKey = 'fixture-sends:' + conversationId;
+      const composer = document.getElementById('prompt-textarea');
+      const send = document.querySelector('[data-testid="send-button"]');
+      const messages = document.getElementById('messages');
+      let nextSendUncertain = false;
+      let responseCount = 0;
+
+      const readEvents = () => JSON.parse(localStorage.getItem(storageKey) ?? '[]');
+      const recordSend = (content) => {
+        const events = readEvents();
+        events.push({ content, tab: tabName, at: Date.now() });
+        localStorage.setItem(storageKey, JSON.stringify(events));
+      };
+
+      const beginGeneration = () => {
+        composer.disabled = true;
+        send.disabled = true;
+        const stop = document.createElement('button');
+        stop.type = 'button';
+        stop.dataset.testid = 'stop-button';
+        stop.textContent = 'Stop';
+        document.getElementById('chat').append(stop);
+      };
+
+      send.addEventListener('click', () => {
+        const content = composer.value;
+        recordSend(content);
+        if (nextSendUncertain) {
+          nextSendUncertain = false;
+          composer.disabled = true;
+          send.disabled = true;
+          return;
+        }
+        beginGeneration();
+      });
+
+      document.getElementById('fixture-complete').addEventListener('click', () => {
+        document.querySelector('[data-testid="stop-button"]')?.remove();
+        composer.disabled = false;
+        send.disabled = false;
+        composer.value = '';
+        responseCount += 1;
+        const response = document.createElement('article');
+        response.dataset.messageAuthorRole = 'assistant';
+        response.textContent = 'assistant response ' + responseCount;
+        messages.append(response);
+      });
+
+      document.getElementById('fixture-duplicate').addEventListener('click', () => {
+        const marker = document.createElement('span');
+        marker.textContent = 'duplicate mutation ' + Date.now();
+        messages.append(marker);
+      });
+
+      document.getElementById('fixture-error').addEventListener('click', () => {
+        const alert = document.createElement('div');
+        alert.setAttribute('role', 'alert');
+        alert.textContent = 'Network error';
+        document.body.append(alert);
+      });
+
+      document.getElementById('fixture-confirmation').addEventListener('click', () => {
+        const dialog = document.createElement('div');
+        dialog.setAttribute('role', 'dialog');
+        const allow = document.createElement('button');
+        allow.type = 'button';
+        allow.textContent = 'Allow';
+        dialog.append(allow);
+        document.body.append(dialog);
+      });
+
+      document.getElementById('fixture-uncertain').addEventListener('click', () => {
+        nextSendUncertain = true;
+      });
+    })();
+  </script>
+</body>
+</html>`;
+
+export async function createFixtureServer(): Promise<FixtureServer> {
+  const server: Server = createServer((_request, response) => {
+    response.writeHead(200, {
+      'content-type': 'text/html; charset=utf-8',
+      'cache-control': 'no-store',
+    });
+    response.end(pageHtml);
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => resolve());
+  });
+
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('fixture-server-address-unavailable');
+
+  return {
+    origin: `http://127.0.0.1:${address.port}`,
+    close: () => new Promise<void>((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve());
+    }),
+  };
+}

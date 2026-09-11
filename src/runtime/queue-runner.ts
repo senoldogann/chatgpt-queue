@@ -1,0 +1,69 @@
+import type { ChatGPTAdapter } from '../adapter/chatgpt-adapter';
+import type { DispatchReservation } from '../coordinator/queue-coordinator';
+import type { ConversationQueue } from '../domain/types';
+import { evaluateRuntime } from '../domain/state-machine';
+
+export interface RunnerBackend {
+  get(key: string): Promise<ConversationQueue | undefined>;
+  reserve(key: string, baselineAssistantCount: number): Promise<DispatchReservation | null>;
+  generationStarted(key: string, itemId: string, dispatchToken: string): Promise<unknown>;
+  waitingStable(key: string, itemId: string, dispatchToken: string): Promise<unknown>;
+  complete(key: string, itemId: string, dispatchToken: string): Promise<unknown>;
+  block(key: string, reason: string): Promise<unknown>;
+}
+
+export class QueueRunner {
+  constructor(
+    private readonly adapter: ChatGPTAdapter,
+    private readonly backend: RunnerBackend,
+  ) {}
+
+  async evaluate(key: string, domStable: boolean): Promise<void> {
+    const queue = await this.backend.get(key);
+    if (!queue || queue.status !== 'running') return;
+
+    const snapshot = this.adapter.getState(domStable);
+    const baselineAssistantCount = queue.runtime.baselineAssistantCount ?? snapshot.assistantMessageCount;
+    const decision = evaluateRuntime({
+      phase: queue.runtime.phase,
+      snapshot,
+      baselineAssistantCount,
+      generationObserved: queue.runtime.generationObserved ?? false,
+    });
+
+    if (decision.action === 'block') {
+      await this.backend.block(key, decision.reason);
+      return;
+    }
+
+    if (decision.action === 'send') {
+      const reservation = await this.backend.reserve(key, snapshot.assistantMessageCount);
+      if (!reservation) return;
+      const result = await this.adapter.sendMessage(reservation.content);
+      if (!result.attempted) await this.backend.block(key, 'send-not-attempted');
+      return;
+    }
+
+    if (decision.action === 'wait') return;
+
+    const active = queue.runtime.activeItemId
+      ? queue.items.find((item) => item.id === queue.runtime.activeItemId)
+      : undefined;
+    if (!active?.dispatchToken) {
+      await this.backend.block(key, 'active-item-missing');
+      return;
+    }
+
+    if (decision.action === 'generation_started') {
+      await this.backend.generationStarted(key, active.id, active.dispatchToken);
+      return;
+    }
+    if (decision.action === 'wait_for_stability') {
+      await this.backend.waitingStable(key, active.id, active.dispatchToken);
+      return;
+    }
+    if (decision.action === 'complete') {
+      await this.backend.complete(key, active.id, active.dispatchToken);
+    }
+  }
+}
