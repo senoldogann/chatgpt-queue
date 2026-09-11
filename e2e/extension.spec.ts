@@ -116,6 +116,21 @@ test('loads the unpacked MV3 extension and injects the queue UI', async ({ exten
   expect(queue.items[0].state).toBe('queued');
 });
 
+test('sends through the authenticated composer when send appears only after input', async ({ extensionContext, extensionWorker }) => {
+  const page = await openFixture(extensionContext, '/c/authenticated?authenticated=1');
+  await expect(page.locator('button[aria-label="Send message"]')).toHaveCount(0);
+  await addMessage(page, 'authenticated follow-up');
+  await startQueue(page);
+
+  await expect.poll(async () => (await sentEvents(page, 'authenticated')).length).toBe(1);
+  expect((await sentEvents(page, 'authenticated'))[0]?.content).toBe('authenticated follow-up');
+  await expect.poll(async () => (await storedQueue(extensionWorker, 'conv:authenticated'))?.runtime?.phase).toBe('generating');
+
+  await page.locator('#fixture-complete').click();
+  await expect.poll(async () => (await storedQueue(extensionWorker, 'conv:authenticated'))?.status).toBe('completed');
+  await expect(page.locator('button[aria-label="Send message"]')).toHaveCount(0);
+});
+
 test('sends one item at a time and ignores duplicate completion mutations', async ({ extensionContext, extensionWorker }) => {
   const page = await openFixture(extensionContext, '/c/sequence', 'owner');
   await addMessage(page, 'first follow-up');

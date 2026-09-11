@@ -38,6 +38,21 @@ describe('DOMChatGPTAdapter', () => {
     expect(state.sendControlPresent).toBe(false);
   });
 
+  it('recognizes the authenticated composer before a send control exists', () => {
+    const adapter = render(`
+      <main>
+        <div id="prompt-textarea" aria-label="Chat with ChatGPT" role="textbox" contenteditable="true"></div>
+        <button aria-label="Start dictation"></button>
+        <button aria-label="Start Voice"></button>
+      </main>`);
+
+    const state = adapter.getState(false);
+    expect(state.domRecognized).toBe(true);
+    expect(state.composerReady).toBe(true);
+    expect(state.sendControlPresent).toBe(false);
+    expect(state.isGenerating).toBe(false);
+  });
+
   it('detects a usable send button and enabled composer', () => {
     const adapter = render(`
       <main>
@@ -120,6 +135,28 @@ describe('DOMChatGPTAdapter', () => {
     expect(state.domRecognized).toBe(true);
     expect(state.composerReady).toBe(true);
     expect(state.sendControlPresent).toBe(true);
+  });
+
+  it('fills the authenticated composer before requiring a send control to exist', async () => {
+    const adapter = render(`
+      <main>
+        <div id="prompt-textarea" aria-label="Chat with ChatGPT" role="textbox" contenteditable="true"></div>
+        <button aria-label="Start dictation"></button>
+        <button aria-label="Start Voice"></button>
+      </main>`);
+    const composer = document.querySelector<HTMLElement>('#prompt-textarea')!;
+    let button: HTMLButtonElement | undefined;
+    composer.addEventListener('input', () => {
+      button = document.createElement('button');
+      button.setAttribute('aria-label', 'Send message');
+      document.querySelector('main')!.append(button);
+    }, { once: true });
+
+    const result = await adapter.sendMessage('hello');
+
+    expect(composer.textContent).toBe('hello');
+    expect(button).toBeDefined();
+    expect(result).toEqual({ attempted: true });
   });
 
   it('fills the composer before requiring the send control to become enabled', async () => {

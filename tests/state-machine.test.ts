@@ -22,6 +22,10 @@ describe('runtime state machine', () => {
     expect(decide('ready_to_send', safe()).action).toBe('send');
   });
 
+  it('allows dispatch when the authenticated composer is ready but send control is not rendered yet', () => {
+    expect(decide('ready_to_send', safe({ sendControlPresent: false }))).toEqual({ action: 'send' });
+  });
+
   it('recognizes generation start after send', () => {
     expect(decide('waiting_generation_start', safe({ isGenerating: true }))).toEqual({ action: 'generation_started' });
   });

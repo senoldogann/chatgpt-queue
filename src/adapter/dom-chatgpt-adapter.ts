@@ -22,6 +22,8 @@ const COMPOSER_SELECTORS = [
   '[data-testid="prompt-textarea"]',
 ];
 
+const SEND_CONTROL_WAIT_MS = 1_500;
+
 const first = <T extends Element>(document: Document, selectors: string[]): T | null => {
   for (const selector of selectors) {
     const element = document.querySelector<T>(selector);
@@ -39,6 +41,35 @@ const composerReady = (element: Element | null): boolean => {
   if (!element || isDisabled(element)) return false;
   if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) return !element.disabled;
   return element.getAttribute('contenteditable') !== 'false';
+};
+
+const waitForEnabledSend = (document: Document): Promise<HTMLButtonElement | null> => {
+  const current = first<HTMLButtonElement>(document, SEND_SELECTORS);
+  if (current && !isDisabled(current)) return Promise.resolve(current);
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (value: HTMLButtonElement | null) => {
+      if (settled) return;
+      settled = true;
+      observer.disconnect();
+      window.clearTimeout(timer);
+      resolve(value);
+    };
+    const check = () => {
+      const send = first<HTMLButtonElement>(document, SEND_SELECTORS);
+      if (send && !isDisabled(send)) finish(send);
+    };
+    const observer = new MutationObserver(check);
+    observer.observe(document.documentElement, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ['disabled', 'aria-disabled', 'aria-label', 'data-testid'],
+    });
+    const timer = window.setTimeout(() => finish(null), SEND_CONTROL_WAIT_MS);
+    queueMicrotask(check);
+  });
 };
 
 const normalizedText = (element: Element | null): string => element?.textContent?.trim().toLowerCase() ?? '';
@@ -96,7 +127,7 @@ export class DOMChatGPTAdapter implements ChatGPTAdapter {
     const blockingReason = detectBlockingReason(this.document);
 
     return {
-      domRecognized: Boolean(composer && (send || stop)),
+      domRecognized: Boolean(composer || stop),
       isGenerating: Boolean(stop && !isDisabled(stop)),
       composerReady: composerReady(composer),
       sendControlPresent: Boolean(send),
@@ -126,9 +157,8 @@ export class DOMChatGPTAdapter implements ChatGPTAdapter {
 
   async sendMessage(content: string): Promise<SendResult> {
     const composer = first<HTMLElement>(this.document, COMPOSER_SELECTORS);
-    const initialSend = first<HTMLButtonElement>(this.document, SEND_SELECTORS);
-    if (!composer || !initialSend || !composerReady(composer)) {
-      return { attempted: false, reason: 'composer-or-send-not-ready' };
+    if (!composer || !composerReady(composer)) {
+      return { attempted: false, reason: 'composer-not-ready' };
     }
 
     if (composer instanceof HTMLTextAreaElement || composer instanceof HTMLInputElement) {
@@ -138,9 +168,8 @@ export class DOMChatGPTAdapter implements ChatGPTAdapter {
     }
     composer.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: content }));
 
-    await Promise.resolve();
-    const send = first<HTMLButtonElement>(this.document, SEND_SELECTORS);
-    if (!send || isDisabled(send)) {
+    const send = await waitForEnabledSend(this.document);
+    if (!send) {
       return { attempted: false, reason: 'send-not-enabled-after-input' };
     }
 

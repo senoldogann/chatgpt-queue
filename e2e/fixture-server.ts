@@ -33,10 +33,12 @@ const pageHtml = `<!doctype html>
   <script>
     (() => {
       const conversationId = location.pathname.match(/(?:^|\\/)c\\/([^/]+)/)?.[1] ?? 'temporary';
-      const tabName = new URLSearchParams(location.search).get('tab') ?? 'default';
+      const params = new URLSearchParams(location.search);
+      const tabName = params.get('tab') ?? 'default';
+      const authenticatedMode = params.get('authenticated') === '1';
       const storageKey = 'fixture-sends:' + conversationId;
       const composer = document.getElementById('prompt-textarea');
-      const send = document.querySelector('[data-testid="send-button"]');
+      let send = document.querySelector('[data-testid="send-button"]');
       const messages = document.getElementById('messages');
       let nextSendUncertain = false;
       let responseCount = 0;
@@ -48,33 +50,66 @@ const pageHtml = `<!doctype html>
         localStorage.setItem(storageKey, JSON.stringify(events));
       };
 
+      const removeSendControl = () => {
+        send?.remove();
+        send = null;
+      };
+
       const beginGeneration = () => {
         composer.disabled = true;
-        send.disabled = true;
+        if (authenticatedMode) removeSendControl();
+        else if (send) send.disabled = true;
         const stop = document.createElement('button');
         stop.type = 'button';
-        stop.dataset.testid = 'stop-button';
+        if (authenticatedMode) stop.setAttribute('aria-label', 'Stop generating');
+        else stop.dataset.testid = 'stop-button';
         stop.textContent = 'Stop';
         document.getElementById('chat').append(stop);
       };
 
-      send.addEventListener('click', () => {
+      const handleSend = () => {
         const content = composer.value;
         recordSend(content);
         if (nextSendUncertain) {
           nextSendUncertain = false;
           composer.disabled = true;
-          send.disabled = true;
+          if (authenticatedMode) removeSendControl();
+          else if (send) send.disabled = true;
           return;
         }
         beginGeneration();
-      });
+      };
+
+      const bindSend = (button) => button.addEventListener('click', handleSend);
+      const createAuthenticatedSendControl = () => {
+        if (send) return send;
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.setAttribute('aria-label', 'Send message');
+        button.textContent = 'Send';
+        document.getElementById('chat').append(button);
+        send = button;
+        bindSend(button);
+        return button;
+      };
+
+      if (send) bindSend(send);
+      if (authenticatedMode) {
+        removeSendControl();
+        composer.setAttribute('aria-label', 'Chat with ChatGPT');
+        composer.setAttribute('role', 'textbox');
+        composer.addEventListener('input', () => {
+          if (!composer.disabled && composer.value) createAuthenticatedSendControl();
+          else if (!composer.value) removeSendControl();
+        });
+      }
 
       document.getElementById('fixture-complete').addEventListener('click', () => {
-        document.querySelector('[data-testid="stop-button"]')?.remove();
+        document.querySelector('[data-testid="stop-button"], button[aria-label="Stop generating"]')?.remove();
         composer.disabled = false;
-        send.disabled = false;
         composer.value = '';
+        if (authenticatedMode) removeSendControl();
+        else if (send) send.disabled = false;
         responseCount += 1;
         const response = document.createElement('article');
         response.dataset.messageAuthorRole = 'assistant';
