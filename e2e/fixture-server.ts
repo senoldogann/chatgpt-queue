@@ -38,6 +38,7 @@ const pageHtml = `<!doctype html>
       const authenticatedMode = params.get('authenticated') === '1';
       const transientGapMode = params.get('transient-gap') === '1';
       const routeOnSend = params.get('route-on-send');
+      const routeChainFinal = params.get('route-chain-final');
       const delayedStopMs = Number(params.get('delayed-stop-ms') ?? '0');
       const storageKey = 'fixture-sends:' + conversationId;
       const composer = document.getElementById('prompt-textarea');
@@ -93,6 +94,12 @@ const pageHtml = `<!doctype html>
         beginGeneration();
         if (routeOnSend && location.pathname === '/new') {
           history.pushState({}, '', '/c/' + routeOnSend);
+          if (routeChainFinal) {
+            window.setTimeout(() => {
+              history.pushState({}, '', '/c/' + routeChainFinal);
+              document.body.append(document.createElement('span'));
+            }, 100);
+          }
         }
       };
 

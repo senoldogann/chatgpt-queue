@@ -2,7 +2,7 @@ import { DOMChatGPTAdapter } from './adapter/dom-chatgpt-adapter';
 import type { ClaimResult } from './coordinator/queue-coordinator';
 import type { ConversationQueue } from './domain/types';
 import { ChromeClient } from './runtime/chrome-client';
-import { conversationKeyFromUrl } from './runtime/identity';
+import { conversationKeyFromUrl, shouldMigrateConversationKey } from './runtime/identity';
 import { QueueRunner } from './runtime/queue-runner';
 import { QueuePanel } from './ui/queue-panel';
 
@@ -69,7 +69,7 @@ const syncIdentity = async (): Promise<void> => {
   ownsCurrent = false;
   localNotice = undefined;
 
-  if (previousKey.startsWith('temp:') && nextKey.startsWith('conv:')) {
+  if (shouldMigrateConversationKey(previousKey, nextKey)) {
     try {
       const migrated = await client.request<ConversationQueue>({ type: 'migrate', fromKey: previousKey, toKey: nextKey });
       if (migrated.status === 'running' || migrated.status === 'paused') {

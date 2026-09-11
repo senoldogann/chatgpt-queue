@@ -254,6 +254,26 @@ test('does not reserve the next item while generation control is delayed', async
   expect((await sentEvents(page, 'delayed-generation')).map((event) => event.content)).toEqual(['delayed-first', 'delayed-second']);
 });
 
+test('preserves queued items across provisional WEB conversation id promotion', async ({ extensionContext, extensionWorker }) => {
+  const page = await openFixture(extensionContext, '/new?authenticated=1&route-on-send=WEB:provisional-123&route-chain-final=final-456');
+  await addMessage(page, 'web-first');
+  await addMessage(page, 'web-second');
+  await startQueue(page);
+
+  await expect.poll(async () => (await sentEvents(page, 'temporary')).length).toBe(1);
+  await expect(page).toHaveURL(/\/c\/final-456/);
+  await expect.poll(async () => Boolean(await storedQueue(extensionWorker, 'conv:final-456'))).toBe(true);
+  const finalQueue = await storedQueue(extensionWorker, 'conv:final-456');
+  expect(finalQueue.items).toHaveLength(2);
+  expect(finalQueue.items[1]?.content).toBe('web-second');
+  expect(finalQueue.items[1]?.state).toBe('queued');
+  expect(await storedQueue(extensionWorker, 'conv:WEB:provisional-123')).toBeNull();
+
+  await page.locator('#fixture-complete').click();
+  await expect.poll(async () => (await sentEvents(page, 'temporary')).length).toBe(2);
+  expect((await sentEvents(page, 'temporary')).map((event) => event.content)).toEqual(['web-first', 'web-second']);
+});
+
 test('keeps an in-flight new-chat send running when the URL migrates to a conversation', async ({ extensionContext, extensionWorker }) => {
   const page = await openFixture(extensionContext, '/new?authenticated=1&route-on-send=live-route');
   await addMessage(page, 'route-first');
