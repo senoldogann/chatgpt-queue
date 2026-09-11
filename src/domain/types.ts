@@ -58,7 +58,7 @@ export interface PageSnapshot {
   domRecognized: boolean;
   isGenerating: boolean;
   composerReady: boolean;
-  sendReady: boolean;
+  sendControlPresent: boolean;
   assistantMessageCount: number;
   domStable: boolean;
   confirmationVisible: boolean;

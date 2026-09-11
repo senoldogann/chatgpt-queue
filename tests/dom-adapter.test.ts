@@ -22,7 +22,7 @@ describe('DOMChatGPTAdapter', () => {
     const state = adapter.getState(false);
     expect(state.domRecognized).toBe(true);
     expect(state.isGenerating).toBe(true);
-    expect(state.sendReady).toBe(false);
+    expect(state.sendControlPresent).toBe(false);
   });
 
   it('detects a usable send button and enabled composer', () => {
@@ -33,7 +33,7 @@ describe('DOMChatGPTAdapter', () => {
       </main>`);
     const state = adapter.getState(true);
     expect(state.composerReady).toBe(true);
-    expect(state.sendReady).toBe(true);
+    expect(state.sendControlPresent).toBe(true);
     expect(state.domStable).toBe(true);
   });
 
@@ -45,7 +45,7 @@ describe('DOMChatGPTAdapter', () => {
       </main>`);
     const state = adapter.getState(false);
     expect(state.composerReady).toBe(false);
-    expect(state.sendReady).toBe(false);
+    expect(state.sendControlPresent).toBe(true);
   });
 
   it('detects blocking errors only from error/alert UI', () => {
@@ -91,6 +91,38 @@ describe('DOMChatGPTAdapter', () => {
     const result = await adapter.sendMessage('hello');
 
     expect(document.querySelector('#prompt-textarea')?.textContent).toBe('hello');
+    expect(click).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ attempted: true });
+  });
+
+
+  it('recognizes the current Turkish send control while it is disabled on an empty composer', () => {
+    const adapter = render(`
+      <main>
+        <div id="prompt-textarea" contenteditable="true"></div>
+        <button aria-label="İleti gönder" disabled></button>
+      </main>`);
+
+    const state = adapter.getState(false);
+    expect(state.domRecognized).toBe(true);
+    expect(state.composerReady).toBe(true);
+    expect(state.sendControlPresent).toBe(true);
+  });
+
+  it('fills the composer before requiring the send control to become enabled', async () => {
+    const adapter = render(`
+      <main>
+        <div id="prompt-textarea" contenteditable="true"></div>
+        <button aria-label="İleti gönder" disabled></button>
+      </main>`);
+    const composer = document.querySelector<HTMLElement>('#prompt-textarea')!;
+    const button = document.querySelector<HTMLButtonElement>('button[aria-label="İleti gönder"]')!;
+    composer.addEventListener('input', () => button.removeAttribute('disabled'), { once: true });
+    const click = vi.spyOn(button, 'click');
+
+    const result = await adapter.sendMessage('hello');
+
+    expect(composer.textContent).toBe('hello');
     expect(click).toHaveBeenCalledTimes(1);
     expect(result).toEqual({ attempted: true });
   });

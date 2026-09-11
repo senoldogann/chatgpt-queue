@@ -7,7 +7,7 @@ const snapshot = (overrides: Partial<PageSnapshot> = {}): PageSnapshot => ({
   domRecognized: true,
   isGenerating: false,
   composerReady: true,
-  sendReady: true,
+  sendControlPresent: true,
   assistantMessageCount: 1,
   domStable: false,
   confirmationVisible: false,
@@ -37,7 +37,7 @@ describe('runtime safety', () => {
   it('blocks a stable disabled composer when generation never appears', () => {
     expect(evaluateRuntime({
       phase: 'sending',
-      snapshot: snapshot({ domStable: true, composerReady: false, sendReady: false }),
+      snapshot: snapshot({ domStable: true, composerReady: false, sendControlPresent: false }),
       baselineAssistantCount: 1,
       generationObserved: false,
     })).toEqual({ action: 'block', reason: 'send-not-confirmed' });

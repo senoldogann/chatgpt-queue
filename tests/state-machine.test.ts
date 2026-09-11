@@ -6,7 +6,7 @@ const safe = (overrides: Partial<PageSnapshot> = {}): PageSnapshot => ({
   domRecognized: true,
   isGenerating: false,
   composerReady: true,
-  sendReady: true,
+  sendControlPresent: true,
   assistantMessageCount: 1,
   domStable: false,
   confirmationVisible: false,

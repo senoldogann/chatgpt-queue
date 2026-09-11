@@ -4,7 +4,9 @@ import type { PageSnapshot } from '../domain/types';
 const SEND_SELECTORS = [
   'button[data-testid="send-button"]',
   'button[aria-label="Send"]',
+  'button[aria-label="Send message"]',
   'button[aria-label="Gönder"]',
+  'button[aria-label="İleti gönder"]',
 ];
 
 const STOP_SELECTORS = [
@@ -95,7 +97,7 @@ export class DOMChatGPTAdapter implements ChatGPTAdapter {
       domRecognized: Boolean(composer && (send || stop)),
       isGenerating: Boolean(stop && !isDisabled(stop)),
       composerReady: composerReady(composer),
-      sendReady: Boolean(send && !isDisabled(send)),
+      sendControlPresent: Boolean(send),
       assistantMessageCount: this.document.querySelectorAll('[data-message-author-role="assistant"]').length,
       domStable,
       confirmationVisible: hasConfirmation(this.document),
@@ -122,8 +124,8 @@ export class DOMChatGPTAdapter implements ChatGPTAdapter {
 
   async sendMessage(content: string): Promise<SendResult> {
     const composer = first<HTMLElement>(this.document, COMPOSER_SELECTORS);
-    const send = first<HTMLButtonElement>(this.document, SEND_SELECTORS);
-    if (!composer || !send || isDisabled(send) || !composerReady(composer)) {
+    const initialSend = first<HTMLButtonElement>(this.document, SEND_SELECTORS);
+    if (!composer || !initialSend || !composerReady(composer)) {
       return { attempted: false, reason: 'composer-or-send-not-ready' };
     }
 
@@ -133,6 +135,13 @@ export class DOMChatGPTAdapter implements ChatGPTAdapter {
       composer.textContent = content;
     }
     composer.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: content }));
+
+    await Promise.resolve();
+    const send = first<HTMLButtonElement>(this.document, SEND_SELECTORS);
+    if (!send || isDisabled(send)) {
+      return { attempted: false, reason: 'send-not-enabled-after-input' };
+    }
+
     send.click();
     return { attempted: true };
   }

@@ -7,7 +7,7 @@ const baseSnapshot: PageSnapshot = {
   domRecognized: true,
   isGenerating: false,
   composerReady: true,
-  sendReady: true,
+  sendControlPresent: true,
   assistantMessageCount: 1,
   domStable: false,
   confirmationVisible: false,
@@ -60,7 +60,7 @@ describe('QueueRunner', () => {
 
   it('confirms generation only after page evidence appears', async () => {
     const backend = new FakeBackend(queue('sending', 'sending'));
-    const adapter = new FakeAdapter({ ...baseSnapshot, isGenerating: true, sendReady: false });
+    const adapter = new FakeAdapter({ ...baseSnapshot, isGenerating: true, sendControlPresent: false });
     await new QueueRunner(adapter, backend).evaluate('conv:a', false);
     expect(backend.calls).toEqual(['generationStarted']);
     expect(adapter.sent).toEqual([]);

@@ -19,7 +19,7 @@ export function evaluateRuntime(input: RuntimeEvaluationInput): RuntimeDecision 
   if (blocked) return { action: 'block', reason: blocked };
 
   const hasNewAssistant = snapshot.assistantMessageCount > baselineAssistantCount;
-  const pageReady = snapshot.composerReady && snapshot.sendReady && !snapshot.isGenerating;
+  const pageReady = snapshot.composerReady && snapshot.sendControlPresent && !snapshot.isGenerating;
 
   switch (phase) {
     case 'ready_to_send':
