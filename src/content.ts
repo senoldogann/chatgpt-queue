@@ -1,6 +1,9 @@
 import { DOMChatGPTAdapter } from './adapter/dom-chatgpt-adapter';
 import type { ClaimResult } from './coordinator/queue-coordinator';
 import type { ConversationQueue } from './domain/types';
+import { FlowRunBrowserController } from './flowrun/browser-controller';
+import { QueueBackedFlowRunHost } from './flowrun/content-host';
+import { chromeFlowRunStorageArea, FlowRunRunRepository } from './flowrun/run-repository';
 import { ChromeClient } from './runtime/chrome-client';
 import { conversationKeyFromUrl, shouldMigrateConversationKey } from './runtime/identity';
 import { QueueRunner } from './runtime/queue-runner';
@@ -9,6 +12,7 @@ import { QueuePanel } from './ui/queue-panel';
 const TEMP_SESSION_KEY = 'chatgpt-queue:temporary-key';
 const STABLE_WINDOW_MS = 900;
 const HEARTBEAT_MS = 10_000;
+const FLOWRUN_RECONCILE_MS = 500;
 
 const getTemporaryKey = (): string => {
   const existing = sessionStorage.getItem(TEMP_SESSION_KEY);
@@ -112,6 +116,40 @@ const mutateAndRender = async (request: Parameters<ChromeClient['request']>[0]):
   await render();
 };
 
+const waitForQueueSignal = (): Promise<void> => new Promise((resolve) => {
+  let settled = false;
+  const finish = () => {
+    if (settled) return;
+    settled = true;
+    window.clearTimeout(timer);
+    chrome.storage.onChanged.removeListener(listener);
+    resolve();
+  };
+  const listener = (_changes: Record<string, chrome.storage.StorageChange>, areaName: string) => {
+    if (areaName === 'local') finish();
+  };
+  const timer = window.setTimeout(finish, FLOWRUN_RECONCILE_MS);
+  chrome.storage.onChanged.addListener(listener);
+});
+
+const flowRunRepository = new FlowRunRunRepository(chromeFlowRunStorageArea());
+const flowRunHost = new QueueBackedFlowRunHost({
+  conversationKey: () => currentKey,
+  getQueue: async () => (await client.get(currentKey)) ?? ensureCurrent(),
+  addPrompt: async (content) => {
+    const queue = await client.request<ConversationQueue>({ type: 'add', key: currentKey, messages: [content] });
+    await render();
+    return queue;
+  },
+  startQueue: startOrResume,
+  latestAssistantArtifact: () => adapter.getLatestCompletedAssistantArtifact(),
+  waitForSignal: waitForQueueSignal,
+});
+const flowRunController = new FlowRunBrowserController({
+  host: flowRunHost,
+  repository: flowRunRepository,
+});
+
 panel = new QueuePanel(host, {
   add: async (content) => mutateAndRender({ type: 'add', key: currentKey, messages: [content] }),
   start: startOrResume,
@@ -187,7 +225,8 @@ window.setInterval(() => {
   });
 }, HEARTBEAT_MS);
 
-void attachExistingQueue().then(() => {
+void attachExistingQueue().then(async () => {
+  await flowRunController.recoverInterrupted(currentKey);
   armStableEvaluation();
 }).catch(async (error: unknown) => {
   localNotice = error instanceof Error ? error.message : String(error);

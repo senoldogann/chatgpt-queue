@@ -36,9 +36,9 @@ class FakeHost implements BrowserChatProviderHost {
   current = emptyQueue();
   conversationKey() { return 'conv:browser'; }
   async getQueue() { return structuredClone(this.current); }
-  async addPrompt() { throw new Error('unused'); }
+  async addPrompt(): Promise<ConversationQueue> { throw new Error('unused'); }
   async startQueue() { throw new Error('unused'); }
-  async waitForItemTerminal() { throw new Error('unused'); }
+  async waitForItemTerminal(): Promise<ConversationQueue> { throw new Error('unused'); }
   latestAssistantArtifact(): AssistantArtifact | null { return null; }
 }
 

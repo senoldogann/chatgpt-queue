@@ -35,7 +35,7 @@ export class FlowRunBrowserController {
   private readonly provider: ChatProvider;
   private readonly idFactory: (prefix: string) => string;
   private readonly now: () => number;
-  private current?: WorkflowRun;
+  private current: WorkflowRun | undefined;
   private persistTail: Promise<void> = Promise.resolve();
 
   constructor(private readonly options: FlowRunBrowserControllerOptions) {
