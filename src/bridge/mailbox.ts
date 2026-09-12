@@ -16,6 +16,7 @@ export class BridgeMailbox {
   readonly inboxDir: string;
   readonly eventsDir: string;
   readonly resultsDir: string;
+  private eventMutationTail: Promise<void> = Promise.resolve();
 
   constructor(readonly root: string, private readonly maxCompletedJobs = MAX_COMPLETED_MAILBOX_JOBS) {
     this.inboxDir = join(root, 'inbox');
@@ -71,6 +72,32 @@ export class BridgeMailbox {
     await this.ensure();
     const name = `${jobId}.${String(sequence).padStart(8, '0')}.json`;
     await this.atomicWriteJson(join(this.eventsDir, name), value);
+  }
+
+  async nextEventSequence(jobId: string): Promise<number> {
+    assertJobId(jobId);
+    await this.ensure();
+    const prefix = `${jobId}.`;
+    let maximum = 0;
+    for (const name of await readdir(this.eventsDir)) {
+      if (!name.startsWith(prefix) || !name.endsWith('.json')) continue;
+      const encoded = name.slice(prefix.length, -5);
+      if (!/^\d{8}$/.test(encoded)) continue;
+      maximum = Math.max(maximum, Number(encoded));
+    }
+    return maximum + 1;
+  }
+
+  async appendEvent(jobId: string, value: unknown): Promise<number> {
+    let writtenSequence = 0;
+    const operation = this.eventMutationTail.then(async () => {
+      const sequence = await this.nextEventSequence(jobId);
+      await this.writeEvent(jobId, sequence, value);
+      writtenSequence = sequence;
+    });
+    this.eventMutationTail = operation.then(() => undefined, () => undefined);
+    await operation;
+    return writtenSequence;
   }
 
   async readEvents(jobId: string): Promise<unknown[]> {

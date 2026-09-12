@@ -37,7 +37,10 @@ export class TargetRegistry {
       targetId,
       provider: 'chatgpt',
       conversationKey: registration.conversationKey,
-      busy: registration.busy,
+      busy: registration.busy
+        || ['running', 'paused', 'blocked'].includes(registration.queueStatus)
+        || registration.workflowStatus === 'pending'
+        || registration.workflowStatus === 'running',
       tabId,
       expiresAt: now + this.ttlMs,
     };

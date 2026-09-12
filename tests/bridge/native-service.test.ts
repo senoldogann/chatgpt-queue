@@ -18,6 +18,7 @@ class FakePort implements NativePortLike {
   onMessage = { addListener: (listener: (message: unknown) => void) => this.messageListeners.push(listener) };
   onDisconnect = { addListener: (listener: () => void) => this.disconnectListeners.push(listener) };
   emit(message: unknown) { for (const listener of this.messageListeners) listener(message); }
+  emitDisconnect() { for (const listener of this.disconnectListeners) listener(); }
 }
 
 const workflow = {
@@ -73,6 +74,58 @@ describe('NativeBridgeService', () => {
     expect(await service.enable()).toBe(true);
     expect(requestPermission).toHaveBeenCalledTimes(1);
     expect(connectNative).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not report connected until the native host hello handshake completes', async () => {
+    const port = new FakePort();
+    const service = new NativeBridgeService({
+      hasPermission: async () => true,
+      requestPermission: async () => true,
+      connectNative: () => port,
+      repository: new BridgeJobRepository(new MemoryStorage()),
+      registry: new TargetRegistry(),
+      routeToTab: vi.fn(),
+      now: () => 2_000,
+    });
+
+    expect(await service.ensureConnected()).toBe(true);
+    expect(service.state()).toBe('disconnected');
+    port.emit({ type: 'bridge.hello', version: 1, secret: 'a'.repeat(64) });
+    expect(service.state()).toBe('connected');
+  });
+
+  it('consumes disconnect errors and schedules a reconnect', async () => {
+    const first = new FakePort();
+    const second = new FakePort();
+    const ports = [first, second];
+    const connectNative = vi.fn(() => ports.shift()!);
+    const consumeLastError = vi.fn();
+    const scheduled: Array<() => void> = [];
+    const service = new NativeBridgeService({
+      hasPermission: async () => true,
+      requestPermission: async () => true,
+      connectNative,
+      repository: new BridgeJobRepository(new MemoryStorage()),
+      registry: new TargetRegistry(),
+      routeToTab: vi.fn(),
+      now: () => 2_000,
+      consumeLastError,
+      scheduleReconnect: (callback) => { scheduled.push(callback); },
+    });
+
+    await service.ensureConnected();
+    first.emit({ type: 'bridge.hello', version: 1, secret: 'a'.repeat(64) });
+    expect(service.state()).toBe('connected');
+    first.emitDisconnect();
+
+    expect(service.state()).toBe('disconnected');
+    expect(consumeLastError).toHaveBeenCalledTimes(1);
+    expect(scheduled).toHaveLength(1);
+    await scheduled[0]!();
+    expect(connectNative).toHaveBeenCalledTimes(2);
+    expect(service.state()).toBe('disconnected');
+    second.emit({ type: 'bridge.hello', version: 1, secret: 'a'.repeat(64) });
+    expect(service.state()).toBe('connected');
   });
 
   it('connects to the exact native host and answers targets after secret handshake', async () => {

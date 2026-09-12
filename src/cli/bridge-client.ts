@@ -21,9 +21,11 @@ export interface SubmitRunArgs {
 export interface BridgeCliApi {
   listTargets(): Promise<BridgeTarget[]>;
   submitRun(args: SubmitRunArgs): Promise<{ jobId: string; result: BridgeJobResult }>;
-  follow(jobId: string): Promise<BridgeJobResult>;
+  follow(jobId: string, timeoutMs?: number): Promise<BridgeJobResult>;
   status(jobId: string): Promise<BridgeJobResult | undefined>;
 }
+
+export const DEFAULT_BRIDGE_FOLLOW_TIMEOUT_MS = 6 * 60 * 60 * 1000;
 
 const sleepDefault = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -100,13 +102,15 @@ export class NodeBridgeClient implements BridgeCliApi {
     return { jobId: request.jobId, result };
   }
 
-  async follow(jobId: string): Promise<BridgeJobResult> {
+  async follow(jobId: string, timeoutMs = DEFAULT_BRIDGE_FOLLOW_TIMEOUT_MS): Promise<BridgeJobResult> {
     const terminal = new Set(['completed', 'blocked', 'failed']);
-    while (true) {
+    const deadline = this.now() + timeoutMs;
+    while (this.now() <= deadline) {
       const result = await this.mailbox.readResult(jobId);
       if (isResult(result, jobId) && terminal.has(result.status)) return result;
       await this.sleep(250);
     }
+    throw new Error('bridge-follow-timeout');
   }
 
   async status(jobId: string): Promise<BridgeJobResult | undefined> {

@@ -19,6 +19,8 @@ export interface NativeBridgeServiceDependencies {
   registry: TargetRegistry;
   routeToTab(tabId: number, message: unknown): Promise<unknown>;
   now?: () => number;
+  consumeLastError?: () => void;
+  scheduleReconnect?: (callback: () => Promise<void>) => void;
 }
 
 const isHello = (value: unknown): value is { type: 'bridge.hello'; version: 1; secret: string } => {
@@ -43,6 +45,7 @@ export class NativeBridgeService {
   private bridgeState: NativeBridgeState = 'disconnected';
   private expectedSecret: string | undefined;
   private readonly now: () => number;
+  private reconnectScheduled = false;
 
   constructor(private readonly deps: NativeBridgeServiceDependencies) {
     this.now = deps.now ?? (() => Date.now());
@@ -61,15 +64,23 @@ export class NativeBridgeService {
     try {
       const port = this.deps.connectNative(NATIVE_HOST_NAME);
       this.port = port;
-      this.bridgeState = 'connected';
+      this.bridgeState = 'disconnected';
       this.expectedSecret = undefined;
       port.onMessage.addListener((message) => { void this.handleHostMessage(message); });
       port.onDisconnect.addListener(() => {
-        if (this.port === port) {
-          this.port = undefined;
-          this.expectedSecret = undefined;
-          this.bridgeState = 'disconnected';
-        }
+        if (this.port !== port) return;
+        this.deps.consumeLastError?.();
+        this.port = undefined;
+        this.expectedSecret = undefined;
+        this.bridgeState = 'disconnected';
+        if (this.reconnectScheduled) return;
+        this.reconnectScheduled = true;
+        const reconnect = async () => {
+          this.reconnectScheduled = false;
+          await this.ensureConnected();
+        };
+        if (this.deps.scheduleReconnect) this.deps.scheduleReconnect(reconnect);
+        else setTimeout(() => { void reconnect(); }, 1_000);
       });
       return true;
     } catch {
@@ -90,6 +101,7 @@ export class NativeBridgeService {
   async handleHostMessage(raw: unknown): Promise<void> {
     if (isHello(raw)) {
       this.expectedSecret = raw.secret;
+      this.bridgeState = 'connected';
       return;
     }
     const identity = requestIdentity(raw);
