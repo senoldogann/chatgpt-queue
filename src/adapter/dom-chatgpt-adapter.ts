@@ -22,11 +22,27 @@ const COMPOSER_SELECTORS = [
   '[data-testid="prompt-textarea"]',
 ];
 
+const ASSISTANT_SELECTOR = '[data-message-author-role="assistant"]';
+const ASSISTANT_COMPLETION_SELECTORS = [
+  'button[data-testid="copy-turn-action-button"]',
+  'button[aria-label*="Copy response" i]',
+  'button[aria-label*="Yanıtı kopyala" i]',
+  'button[aria-label*="Yaniti kopyala" i]',
+];
+
 const SEND_CONTROL_WAIT_MS = 1_500;
 
 const first = <T extends Element>(document: Document, selectors: string[]): T | null => {
   for (const selector of selectors) {
     const element = document.querySelector<T>(selector);
+    if (element) return element;
+  }
+  return null;
+};
+
+const firstWithin = <T extends Element>(root: Element, selectors: string[]): T | null => {
+  for (const selector of selectors) {
+    const element = root.querySelector<T>(selector);
     if (element) return element;
   }
   return null;
@@ -117,6 +133,15 @@ const hasConfirmation = (document: Document): boolean => {
   });
 };
 
+const assistantState = (document: Document): { count: number; completionControlPresent: boolean } => {
+  const messages = [...document.querySelectorAll<HTMLElement>(ASSISTANT_SELECTOR)];
+  const latestMessage = messages.at(-1);
+  if (!latestMessage) return { count: 0, completionControlPresent: false };
+  const latestTurn = latestMessage.closest<HTMLElement>('[data-testid^="conversation-turn-"]') ?? latestMessage;
+  const completionControl = firstWithin<HTMLButtonElement>(latestTurn, ASSISTANT_COMPLETION_SELECTORS);
+  return { count: messages.length, completionControlPresent: Boolean(completionControl && !isDisabled(completionControl)) };
+};
+
 export class DOMChatGPTAdapter implements ChatGPTAdapter {
   constructor(private readonly document: Document) {}
 
@@ -125,19 +150,20 @@ export class DOMChatGPTAdapter implements ChatGPTAdapter {
     const send = first<HTMLButtonElement>(this.document, SEND_SELECTORS);
     const stop = first<HTMLButtonElement>(this.document, STOP_SELECTORS);
     const blockingReason = detectBlockingReason(this.document);
+    const assistant = assistantState(this.document);
 
     return {
       domRecognized: Boolean(composer || stop),
       isGenerating: Boolean(stop && !isDisabled(stop)),
       composerReady: composerReady(composer),
       sendControlPresent: Boolean(send),
-      assistantMessageCount: this.document.querySelectorAll('[data-message-author-role="assistant"]').length,
+      assistantMessageCount: assistant.count,
+      assistantCompletionControlPresent: assistant.completionControlPresent,
       domStable,
       confirmationVisible: hasConfirmation(this.document),
       blockingReason,
     };
   }
-
 
   getDiagnosticSummary(): string {
     const composer = first<HTMLElement>(this.document, COMPOSER_SELECTORS);

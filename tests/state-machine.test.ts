@@ -8,6 +8,7 @@ const safe = (overrides: Partial<PageSnapshot> = {}): PageSnapshot => ({
   composerReady: true,
   sendControlPresent: true,
   assistantMessageCount: 1,
+  assistantCompletionControlPresent: false,
   domStable: false,
   confirmationVisible: false,
   blockingReason: null,
@@ -32,6 +33,19 @@ describe('runtime state machine', () => {
       controlObserved: false,
     });
     expect(decide('generating', safe({ assistantMessageCount: 2, isGenerating: false, domStable: true }), 1, false)).toEqual({ action: 'wait' });
+  });
+
+  it('accepts a completed assistant turn as fallback evidence when the stop control was missed', () => {
+    expect(decide('generating', safe({
+      assistantMessageCount: 2,
+      assistantCompletionControlPresent: true,
+    }), 1, false)).toEqual({ action: 'wait_for_stability' });
+
+    expect(decide('waiting_stable_completion', safe({
+      assistantMessageCount: 2,
+      assistantCompletionControlPresent: true,
+      domStable: true,
+    }), 1, false)).toEqual({ action: 'complete' });
   });
 
   it('recognizes generation start after send', () => {
