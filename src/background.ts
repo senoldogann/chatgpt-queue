@@ -1,3 +1,5 @@
+declare const __FLOWRUN_E2E__: boolean;
+
 import { decideBridgeJobOwnership } from './bridge/job-authorization';
 import { BridgeJobRepository, chromeBridgeStorageArea } from './bridge/job-repository';
 import { NativeBridgeService, type NativePortLike } from './bridge/native-service';
@@ -15,10 +17,16 @@ const nativeBridge = new NativeBridgeService({
   hasPermission: () => chrome.permissions.contains({ permissions: ['nativeMessaging'] }),
   requestPermission: () => chrome.permissions.request({ permissions: ['nativeMessaging'] }),
   connectNative: (name) => chrome.runtime.connectNative(name) as unknown as NativePortLike,
+  consumeLastError: () => { void chrome.runtime.lastError; },
   repository: bridgeRepository,
   registry: targetRegistry,
   routeToTab: (tabId, message) => chrome.tabs.sendMessage(tabId, message),
 });
+
+if (__FLOWRUN_E2E__) {
+  (globalThis as typeof globalThis & { __flowrunE2eNativeMessage?: (message: unknown) => Promise<void> }).__flowrunE2eNativeMessage =
+    (message) => nativeBridge.handleHostMessage(message);
+}
 
 const notify = async (queue: ConversationQueue): Promise<void> => {
   if (queue.status !== 'completed' && queue.status !== 'blocked') return;

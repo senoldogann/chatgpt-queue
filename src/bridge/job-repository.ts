@@ -67,6 +67,11 @@ export class BridgeJobRepository {
       const existing = state.jobs[record.jobId];
       if (existing) return { record: structuredClone(existing), created: false };
 
+      const activeForConversation = Object.values(state.jobs).find((candidate) =>
+        candidate.conversationKey === record.conversationKey
+        && (candidate.status === 'accepted' || candidate.status === 'running'));
+      if (activeForConversation) throw new Error('bridge.target-busy');
+
       state.jobs[record.jobId] = structuredClone(record);
       state.order.push(record.jobId);
       while (state.order.length > MAX_BRIDGE_JOB_HISTORY) {

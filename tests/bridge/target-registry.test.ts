@@ -11,6 +11,29 @@ describe('TargetRegistry', () => {
     expect(registry.resolve(target.targetId, 2_000)?.tabId).toBe(42);
   });
 
+  it('derives busy from queue and workflow state instead of trusting a stale false flag', () => {
+    const registry = new TargetRegistry({ idFactory: () => 'opaque' });
+
+    const queueRunning = registry.register(1, { conversationKey: 'conv:a', queueStatus: 'running', busy: false }, 1_000);
+    expect(queueRunning.busy).toBe(true);
+
+    const workflowRunning = registry.register(1, {
+      conversationKey: 'conv:a',
+      queueStatus: 'completed',
+      workflowStatus: 'running',
+      busy: false,
+    }, 2_000);
+    expect(workflowRunning.busy).toBe(true);
+
+    const idle = registry.register(1, {
+      conversationKey: 'conv:a',
+      queueStatus: 'completed',
+      workflowStatus: 'completed',
+      busy: false,
+    }, 3_000);
+    expect(idle.busy).toBe(false);
+  });
+
   it('keeps an id across heartbeats and rotates it when the conversation changes', () => {
     let seq = 0;
     const registry = new TargetRegistry({ idFactory: () => `id-${++seq}` });

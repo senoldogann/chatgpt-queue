@@ -37,6 +37,24 @@ describe('BridgeMailbox', () => {
     expect(await box.readResult(request.jobId)).toEqual({ status: 'completed' });
   });
 
+  it('continues event sequence numbers after a native host restart', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'flowrun-mailbox-'));
+    const firstHost = new BridgeMailbox(root);
+    await firstHost.writeEvent(request.jobId, 1, { status: 'accepted' });
+    await firstHost.writeEvent(request.jobId, 2, { status: 'running' });
+
+    const restartedHost = new BridgeMailbox(root);
+    const next = await restartedHost.nextEventSequence(request.jobId);
+    expect(next).toBe(3);
+    await restartedHost.writeEvent(request.jobId, next, { status: 'completed' });
+
+    expect(await restartedHost.readEvents(request.jobId)).toEqual([
+      { status: 'accepted' },
+      { status: 'running' },
+      { status: 'completed' },
+    ]);
+  });
+
   it('removes accepted inbox requests and bounds completed result/event history', async () => {
     const root = await mkdtemp(join(tmpdir(), 'flowrun-mailbox-'));
     const box = new BridgeMailbox(root, 2);

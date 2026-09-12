@@ -17,7 +17,6 @@ const mailbox = new BridgeMailbox(config.bridgeRoot);
 await mailbox.ensure();
 
 const sent = new Set<string>();
-const sequences = new Map<string, number>();
 const terminal = new Set(['completed', 'blocked', 'failed']);
 
 const emit = (value: unknown): void => {
@@ -43,9 +42,7 @@ process.stdin.on('data', (chunk: Buffer) => {
       const record = message as Record<string, unknown>;
       const jobId = typeof record.jobId === 'string' ? record.jobId : undefined;
       if (!jobId) continue;
-      const sequence = (sequences.get(jobId) ?? 0) + 1;
-      sequences.set(jobId, sequence);
-      void mailbox.writeEvent(jobId, sequence, message).then(async () => {
+      void mailbox.appendEvent(jobId, message).then(async () => {
         if (record.kind === 'targets' || (typeof record.status === 'string' && terminal.has(record.status))) {
           await mailbox.writeResult(jobId, message);
         }

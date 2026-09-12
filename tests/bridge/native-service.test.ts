@@ -18,6 +18,7 @@ class FakePort implements NativePortLike {
   onMessage = { addListener: (listener: (message: unknown) => void) => this.messageListeners.push(listener) };
   onDisconnect = { addListener: (listener: () => void) => this.disconnectListeners.push(listener) };
   emit(message: unknown) { for (const listener of this.messageListeners) listener(message); }
+  emitDisconnect() { for (const listener of this.disconnectListeners) listener(); }
 }
 
 const workflow = {
@@ -73,6 +74,58 @@ describe('NativeBridgeService', () => {
     expect(await service.enable()).toBe(true);
     expect(requestPermission).toHaveBeenCalledTimes(1);
     expect(connectNative).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not report connected until the native host hello handshake completes', async () => {
+    const port = new FakePort();
+    const service = new NativeBridgeService({
+      hasPermission: async () => true,
+      requestPermission: async () => true,
+      connectNative: () => port,
+      repository: new BridgeJobRepository(new MemoryStorage()),
+      registry: new TargetRegistry(),
+      routeToTab: vi.fn(),
+      now: () => 2_000,
+    });
+
+    expect(await service.ensureConnected()).toBe(true);
+    expect(service.state()).toBe('disconnected');
+    port.emit({ type: 'bridge.hello', version: 1, secret: 'a'.repeat(64) });
+    expect(service.state()).toBe('connected');
+  });
+
+  it('consumes disconnect errors and schedules a reconnect', async () => {
+    const first = new FakePort();
+    const second = new FakePort();
+    const ports = [first, second];
+    const connectNative = vi.fn(() => ports.shift()!);
+    const consumeLastError = vi.fn();
+    const scheduled: Array<() => void> = [];
+    const service = new NativeBridgeService({
+      hasPermission: async () => true,
+      requestPermission: async () => true,
+      connectNative,
+      repository: new BridgeJobRepository(new MemoryStorage()),
+      registry: new TargetRegistry(),
+      routeToTab: vi.fn(),
+      now: () => 2_000,
+      consumeLastError,
+      scheduleReconnect: (callback) => { scheduled.push(callback); },
+    });
+
+    await service.ensureConnected();
+    first.emit({ type: 'bridge.hello', version: 1, secret: 'a'.repeat(64) });
+    expect(service.state()).toBe('connected');
+    first.emitDisconnect();
+
+    expect(service.state()).toBe('disconnected');
+    expect(consumeLastError).toHaveBeenCalledTimes(1);
+    expect(scheduled).toHaveLength(1);
+    await scheduled[0]!();
+    expect(connectNative).toHaveBeenCalledTimes(2);
+    expect(service.state()).toBe('disconnected');
+    second.emit({ type: 'bridge.hello', version: 1, secret: 'a'.repeat(64) });
+    expect(service.state()).toBe('connected');
   });
 
   it('connects to the exact native host and answers targets after secret handshake', async () => {
@@ -194,6 +247,36 @@ describe('NativeBridgeService', () => {
       && message.error === undefined)).toBe(true));
     expect(route).toHaveBeenCalledTimes(1);
     expect(port.sent.some((message: any) => message.error === 'bridge.expired')).toBe(false);
+  });
+
+  it('durably rejects a second job for the same conversation even when the target registry is still stale-idle', async () => {
+    const storage = new MemoryStorage();
+    const repo = new BridgeJobRepository(storage);
+    const port = new FakePort();
+    const registry = new TargetRegistry({ idFactory: () => 'opaque' });
+    registry.register(9, { conversationKey: 'conv:a', queueStatus: 'completed', busy: false }, 1_000);
+    const route = vi.fn(async () => ({ ok: true }));
+    const service = new NativeBridgeService({
+      hasPermission: async () => true,
+      requestPermission: async () => true,
+      connectNative: () => port,
+      repository: repo,
+      registry,
+      routeToTab: route,
+      now: () => 2_000,
+    });
+    await service.ensureConnected();
+    port.emit({ type: 'bridge.hello', version: 1, secret: 'a'.repeat(64) });
+    port.emit(runRequest);
+    await vi.waitFor(() => expect(route).toHaveBeenCalledTimes(1));
+
+    const secondJobId = '123e4567-e89b-42d3-a456-426614174001';
+    port.sent.length = 0;
+    port.emit({ ...runRequest, jobId: secondJobId });
+
+    await vi.waitFor(() => expect(port.sent.some((message: any) => message.jobId === secondJobId && message.error === 'bridge.target-busy')).toBe(true));
+    expect(route).toHaveBeenCalledTimes(1);
+    expect(await repo.get(secondJobId)).toBeUndefined();
   });
 
   it('rejects requests before handshake or with the wrong secret', async () => {

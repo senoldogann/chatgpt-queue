@@ -41,6 +41,12 @@ jobs:
       - name: Production build
         run: npm run build
 
+      - name: CLI build
+        run: npm run build:cli
+
+      - name: Native host build
+        run: npm run build:native-host
+
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
 

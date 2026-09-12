@@ -46,6 +46,7 @@ export interface WorkflowRun {
   events: RunEvent[];
   browser?: {
     conversationKey: string;
+    bridgeJobId?: string;
   };
   createdAt: number;
   updatedAt: number;

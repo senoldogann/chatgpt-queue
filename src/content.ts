@@ -1,7 +1,7 @@
 declare const __FLOWRUN_E2E__: boolean;
 
 import { DOMChatGPTAdapter } from './adapter/dom-chatgpt-adapter';
-import { BridgeContentController } from './bridge/content-controller';
+import { BridgeContentController, publishRecoveredBridgeRun } from './bridge/content-controller';
 import type { ClaimResult } from './coordinator/queue-coordinator';
 import type { ConversationQueue } from './domain/types';
 import { FlowRunBrowserController } from './flowrun/browser-controller';
@@ -224,11 +224,11 @@ const flowRunController = new FlowRunBrowserController({
 });
 
 const bridgeContentController = new BridgeContentController({
-  run: async (workflow, inputs) => {
+  run: async (workflow, inputs, context) => {
     selectedWorkflow = workflow;
     workflowError = undefined;
     await render();
-    return flowRunController.run(workflow, inputs);
+    return flowRunController.run(workflow, inputs, context);
   },
   publish: async (jobId, update) => {
     // Refresh the registration before reporting: a restarted service worker starts with an empty
@@ -407,7 +407,12 @@ window.setInterval(() => {
 }, HEARTBEAT_MS);
 
 void attachExistingQueue().then(async () => {
-  await flowRunController.recoverInterrupted(currentKey);
+  const recoveredRun = await flowRunController.recoverInterrupted(currentKey);
+  if (recoveredRun) {
+    await publishRecoveredBridgeRun(recoveredRun, async (jobId, update) => {
+      await client.request({ type: 'bridgeJobUpdate', jobId, ...update });
+    });
+  }
   await registerBridgeTarget().catch(() => undefined);
   armStableEvaluation();
 }).catch(async (error: unknown) => {
