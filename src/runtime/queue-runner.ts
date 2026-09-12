@@ -12,11 +12,20 @@ export interface RunnerBackend {
   block(key: string, reason: string): Promise<unknown>;
 }
 
+export interface QueueRunnerOptions {
+  now?: () => number;
+}
+
 export class QueueRunner {
+  private readonly now: () => number;
+
   constructor(
     private readonly adapter: ChatGPTAdapter,
     private readonly backend: RunnerBackend,
-  ) {}
+    options: QueueRunnerOptions = {},
+  ) {
+    this.now = options.now ?? (() => Date.now());
+  }
 
   async evaluate(key: string, domStable: boolean): Promise<void> {
     const queue = await this.backend.get(key);
@@ -28,6 +37,12 @@ export class QueueRunner {
 
     const snapshot = this.adapter.getState(domStable);
     const baselineAssistantCount = queue.runtime.baselineAssistantCount ?? snapshot.assistantMessageCount;
+    const active = queue.runtime.activeItemId
+      ? queue.items.find((item) => item.id === queue.runtime.activeItemId)
+      : undefined;
+    // Legacy states (and states written before the active item was acknowledged) have no
+    // recorded wait start; the item start time keeps a stuck completion recoverable.
+    const waitingSince = queue.runtime.stableWaitStartedAt ?? active?.startedAt;
     const decision = evaluateRuntime({
       phase: queue.runtime.phase,
       snapshot,
@@ -36,6 +51,7 @@ export class QueueRunner {
         ? {}
         : { baselineAssistantTurnKey: queue.runtime.baselineAssistantTurnKey }),
       generationObserved: queue.runtime.generationObserved ?? false,
+      ...(waitingSince === undefined ? {} : { completionWaitMs: Math.max(0, this.now() - waitingSince) }),
     });
 
     if (decision.action === 'block') {
@@ -53,9 +69,6 @@ export class QueueRunner {
 
     if (decision.action === 'wait') return;
 
-    const active = queue.runtime.activeItemId
-      ? queue.items.find((item) => item.id === queue.runtime.activeItemId)
-      : undefined;
     if (!active?.dispatchToken) {
       await this.backend.block(key, 'active-item-missing');
       return;

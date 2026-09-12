@@ -124,4 +124,24 @@ describe('QueueRunner', () => {
     await new QueueRunner(adapter, backend).evaluate('conv:a', false);
     expect(backend.calls).toEqual(['reserve', 'block:send-not-attempted']);
   });
+
+  it('completes a proven completion once the bounded quiet grace elapses without a stable DOM', async () => {
+    const backend = new FakeBackend(queue('waiting_stable_completion', 'running'));
+    backend.current.items[0]!.startedAt = 0;
+    const adapter = new FakeAdapter({ ...baseSnapshot, assistantMessageCount: 2 });
+
+    await new QueueRunner(adapter, backend, { now: () => 10_000 }).evaluate('conv:a', false);
+
+    expect(backend.calls).toEqual(['complete']);
+  });
+
+  it('keeps waiting for the quiet window before the grace elapses', async () => {
+    const backend = new FakeBackend(queue('waiting_stable_completion', 'running'));
+    backend.current.items[0]!.startedAt = 9_000;
+    const adapter = new FakeAdapter({ ...baseSnapshot, assistantMessageCount: 2 });
+
+    await new QueueRunner(adapter, backend, { now: () => 10_000 }).evaluate('conv:a', false);
+
+    expect(backend.calls).toEqual([]);
+  });
 });

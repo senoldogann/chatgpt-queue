@@ -601,3 +601,21 @@ test('recovers an unresolved send after the MV3 service worker is stopped and re
   await expect(queueRoot(page)).toContainText('Blocked: uncertain-send');
   expect(await sentEvents(page, 'worker-restart')).toHaveLength(1);
 });
+
+test('keeps draining a queue while the page never becomes quiescent', async ({ extensionContext, extensionWorker }) => {
+  test.setTimeout(60_000);
+  const page = await openFixture(extensionContext, '/c/noisy-completion?noisy=1', 'noisy');
+  await addMessage(page, 'noisy-first');
+  await addMessage(page, 'noisy-second');
+  await startQueue(page);
+  await expect.poll(async () => (await sentEvents(page, 'noisy-completion')).length).toBe(1);
+
+  // The response finishes, but unrelated page mutations keep clearing the quiet window.
+  await page.locator('#fixture-complete').click();
+
+  await expect.poll(async () => (await sentEvents(page, 'noisy-completion')).length, { timeout: 20_000 }).toBe(2);
+  expect((await sentEvents(page, 'noisy-completion')).map((event) => event.content)).toEqual(['noisy-first', 'noisy-second']);
+  await page.locator('#fixture-complete').click();
+  await expect.poll(async () => (await storedQueue(extensionWorker, 'conv:noisy-completion'))?.status, { timeout: 20_000 }).toBe('completed');
+  expect((await storedQueue(extensionWorker, 'conv:noisy-completion')).items.map((item: any) => item.state)).toEqual(['completed', 'completed']);
+});

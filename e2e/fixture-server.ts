@@ -46,6 +46,7 @@ const pageHtml = `<!doctype html>
       const responseTexts = params.getAll('response');
       const deliveryTimeoutMode = params.get('delivery-timeout') === '1';
       const seedCompleted = params.get('seed-completed') === '1';
+      const noisyMode = params.get('noisy') === '1';
       const virtualizeAssistant = params.get('virtualize-assistant') === '1';
       const storageKey = 'fixture-sends:' + conversationId;
       const composer = document.getElementById('prompt-textarea');
@@ -227,6 +228,17 @@ const pageHtml = `<!doctype html>
       document.getElementById('fixture-uncertain').addEventListener('click', () => {
         nextSendUncertain = true;
       });
+
+      // A page that keeps mutating unrelated DOM (animations, live regions, re-renders)
+      // never offers the quiescent window the completion heuristic prefers.
+      if (noisyMode) {
+        const noise = document.createElement('span');
+        noise.id = 'fixture-noise';
+        document.body.append(noise);
+        window.setInterval(() => {
+          noise.textContent = 'noise ' + Date.now();
+        }, 100);
+      }
     })();
   </script>
 </body>
