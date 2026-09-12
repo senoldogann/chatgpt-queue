@@ -3,6 +3,8 @@ import type { DispatchReservation } from '../coordinator/queue-coordinator';
 import type { ConversationQueue } from '../domain/types';
 import { evaluateRuntime } from '../domain/state-machine';
 
+export const LEGACY_COMPLETION_RECOVERY_MS = 30_000;
+
 export interface RunnerBackend {
   get(key: string): Promise<ConversationQueue | undefined>;
   reserve(key: string, baselineAssistantCount: number, baselineAssistantTurnKey?: string): Promise<DispatchReservation | null>;
@@ -43,6 +45,16 @@ export class QueueRunner {
     // Legacy states (and states written before the active item was acknowledged) have no
     // recorded wait start; the item start time keeps a stuck completion recoverable.
     const waitingSince = queue.runtime.stableWaitStartedAt ?? active?.startedAt;
+    const generationObserved = queue.runtime.generationObserved ?? false;
+    // Items persisted before assistant-turn identity existed cannot prove completion through
+    // an advanced turn key; they fall back to generation having ended for a while instead.
+    const legacyCompletionRecoveryEligible = queue.runtime.baselineAssistantTurnKey === undefined
+      && generationObserved
+      && active?.startedAt !== undefined
+      && this.now() - active.startedAt >= LEGACY_COMPLETION_RECOVERY_MS
+      && !snapshot.isGenerating
+      && snapshot.composerReady
+      && Boolean(snapshot.latestAssistantTurnKey);
     const decision = evaluateRuntime({
       phase: queue.runtime.phase,
       snapshot,
@@ -50,8 +62,9 @@ export class QueueRunner {
       ...(queue.runtime.baselineAssistantTurnKey === undefined
         ? {}
         : { baselineAssistantTurnKey: queue.runtime.baselineAssistantTurnKey }),
-      generationObserved: queue.runtime.generationObserved ?? false,
+      generationObserved,
       ...(waitingSince === undefined ? {} : { completionWaitMs: Math.max(0, this.now() - waitingSince) }),
+      ...(legacyCompletionRecoveryEligible ? { legacyCompletionRecoveryEligible: true } : {}),
     });
 
     if (decision.action === 'block') {

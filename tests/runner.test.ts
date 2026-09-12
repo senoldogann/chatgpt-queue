@@ -144,4 +144,70 @@ describe('QueueRunner', () => {
 
     expect(backend.calls).toEqual([]);
   });
+
+  it('reconciles an old generating item after a conservative legacy recovery age', async () => {
+    const legacy = queue('generating', 'running');
+    legacy.runtime.generationObserved = true;
+    legacy.runtime.baselineAssistantCount = 3;
+    delete legacy.runtime.baselineAssistantTurnKey;
+    legacy.items[0]!.startedAt = 1_000;
+    const backend = new FakeBackend(legacy);
+    const adapter = new FakeAdapter({
+      ...baseSnapshot,
+      assistantMessageCount: 3,
+      latestAssistantTurnKey: 'assistant:3:final',
+      assistantCompletionControlPresent: false,
+      isGenerating: false,
+      composerReady: true,
+    });
+
+    await new QueueRunner(adapter, backend, { now: () => 31_001 }).evaluate('conv:a', false);
+    expect(backend.calls).toEqual(['waitingStable']);
+  });
+
+  it('finishes a recovered legacy item through the bounded quiet grace instead of a stable DOM', async () => {
+    const legacy = queue('generating', 'running');
+    legacy.runtime.generationObserved = true;
+    legacy.runtime.baselineAssistantCount = 3;
+    delete legacy.runtime.baselineAssistantTurnKey;
+    legacy.items[0]!.startedAt = 1_000;
+    const backend = new FakeBackend(legacy);
+    const adapter = new FakeAdapter({
+      ...baseSnapshot,
+      assistantMessageCount: 3,
+      latestAssistantTurnKey: 'assistant:3:final',
+      assistantCompletionControlPresent: false,
+      isGenerating: false,
+      composerReady: true,
+    });
+
+    await new QueueRunner(adapter, backend, { now: () => 31_001 }).evaluate('conv:a', false);
+    expect(backend.calls).toEqual(['waitingStable']);
+
+    backend.calls.length = 0;
+    backend.current.runtime.phase = 'waiting_stable_completion';
+    backend.current.runtime.stableWaitStartedAt = 31_001;
+    await new QueueRunner(adapter, backend, { now: () => 36_500 }).evaluate('conv:a', false);
+    expect(backend.calls).toEqual(['complete']);
+  });
+
+  it('does not use legacy recovery for a modern item with a baseline turn identity', async () => {
+    const modern = queue('generating', 'running');
+    modern.runtime.generationObserved = true;
+    modern.runtime.baselineAssistantCount = 3;
+    modern.runtime.baselineAssistantTurnKey = 'turn-same';
+    modern.items[0]!.startedAt = 1_000;
+    const backend = new FakeBackend(modern);
+    const adapter = new FakeAdapter({
+      ...baseSnapshot,
+      assistantMessageCount: 3,
+      latestAssistantTurnKey: 'turn-same',
+      assistantCompletionControlPresent: false,
+      isGenerating: false,
+      composerReady: true,
+    });
+
+    await new QueueRunner(adapter, backend, { now: () => 120_000 }).evaluate('conv:a', false);
+    expect(backend.calls).toEqual([]);
+  });
 });

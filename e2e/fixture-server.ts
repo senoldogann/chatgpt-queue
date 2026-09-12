@@ -47,6 +47,7 @@ const pageHtml = `<!doctype html>
       const deliveryTimeoutMode = params.get('delivery-timeout') === '1';
       const seedCompleted = params.get('seed-completed') === '1';
       const noisyMode = params.get('noisy') === '1';
+      const seedCompletedNoCopy = params.get('seed-completed-no-copy') === '1';
       const virtualizeAssistant = params.get('virtualize-assistant') === '1';
       const storageKey = 'fixture-sends:' + conversationId;
       const composer = document.getElementById('prompt-textarea');
@@ -55,16 +56,18 @@ const pageHtml = `<!doctype html>
       let nextSendUncertain = false;
       let responseCount = 0;
 
-      if (seedCompleted) {
+      if (seedCompleted || seedCompletedNoCopy) {
         responseCount = 1;
         const response = document.createElement('article');
         response.dataset.messageAuthorRole = 'assistant';
         response.textContent = 'already completed response';
-        const copy = document.createElement('button');
-        copy.type = 'button';
-        copy.dataset.testid = 'copy-turn-action-button';
-        copy.textContent = 'Copy';
-        response.append(copy);
+        if (seedCompleted) {
+          const copy = document.createElement('button');
+          copy.type = 'button';
+          copy.dataset.testid = 'copy-turn-action-button';
+          copy.textContent = 'Copy';
+          response.append(copy);
+        }
         messages.append(response);
       }
 
