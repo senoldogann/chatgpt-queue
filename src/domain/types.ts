@@ -38,6 +38,7 @@ export interface QueueRuntime {
   phase: RuntimePhase;
   activeItemId?: string;
   baselineAssistantCount?: number;
+  baselineAssistantTurnKey?: string;
   generationObserved?: boolean;
 }
 
@@ -60,6 +61,7 @@ export interface PageSnapshot {
   composerReady: boolean;
   sendControlPresent: boolean;
   assistantMessageCount: number;
+  latestAssistantTurnKey?: string;
   assistantCompletionControlPresent: boolean;
   domStable: boolean;
   confirmationVisible: boolean;

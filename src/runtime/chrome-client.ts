@@ -14,8 +14,13 @@ export class ChromeClient implements RunnerBackend {
     return this.request({ type: 'get', key });
   }
 
-  reserve(key: string, baselineAssistantCount: number): Promise<DispatchReservation | null> {
-    return this.request({ type: 'reserve', key, baselineAssistantCount });
+  reserve(key: string, baselineAssistantCount: number, baselineAssistantTurnKey?: string): Promise<DispatchReservation | null> {
+    return this.request({
+      type: 'reserve',
+      key,
+      baselineAssistantCount,
+      ...(baselineAssistantTurnKey === undefined ? {} : { baselineAssistantTurnKey }),
+    });
   }
 
   generationStarted(key: string, itemId: string, dispatchToken: string, controlObserved: boolean): Promise<ConversationQueue> {

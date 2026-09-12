@@ -181,7 +181,7 @@ export class QueueCoordinator {
     });
   }
 
-  async reserveNext(key: string, tabId: number, baselineAssistantCount: number): Promise<DispatchReservation | null> {
+  async reserveNext(key: string, tabId: number, baselineAssistantCount: number, baselineAssistantTurnKey?: string): Promise<DispatchReservation | null> {
     return this.exclusive(async () => {
       const queue = await this.requiredQueue(key);
       this.requireOwner(queue, tabId);
@@ -196,7 +196,13 @@ export class QueueCoordinator {
       const updated: ConversationQueue = {
         ...queue,
         items,
-        runtime: { phase: 'sending', activeItemId: item.id, baselineAssistantCount, generationObserved: false },
+        runtime: {
+          phase: 'sending',
+          activeItemId: item.id,
+          baselineAssistantCount,
+          ...(baselineAssistantTurnKey === undefined ? {} : { baselineAssistantTurnKey }),
+          generationObserved: false,
+        },
         updatedAt: now,
       };
       await this.repo.put(updated);

@@ -272,4 +272,25 @@ describe('DOMChatGPTAdapter', () => {
     expect(diagnostics).not.toContain('private draft text');
     expect(diagnostics).not.toContain('ignored label text');
   });
+  it('changes fallback assistant turn identity when virtualization replaces a turn without changing count', () => {
+    const adapter = render(`
+      <main>
+        <div id="prompt-textarea" contenteditable="true"></div>
+        <article data-message-author-role="assistant">old virtualized answer</article>
+      </main>`);
+
+    const before = adapter.getState(true);
+    expect(before.assistantMessageCount).toBe(1);
+    expect(before.latestAssistantTurnKey).toBeTruthy();
+
+    document.querySelector('[data-message-author-role="assistant"]')!.remove();
+    document.querySelector('main')!.insertAdjacentHTML('beforeend',
+      '<article data-message-author-role="assistant">new answer after virtualization</article>');
+
+    const after = adapter.getState(true);
+    expect(after.assistantMessageCount).toBe(1);
+    expect(after.latestAssistantTurnKey).toBeTruthy();
+    expect(after.latestAssistantTurnKey).not.toBe(before.latestAssistantTurnKey);
+  });
+
 });

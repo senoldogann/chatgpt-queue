@@ -26,7 +26,7 @@ export async function handleBackgroundRequest(request: BackgroundRequest, tabId:
     case 'recover':
       return coordinator.recover(request.key);
     case 'reserve':
-      return coordinator.reserveNext(request.key, tabId, request.baselineAssistantCount);
+      return coordinator.reserveNext(request.key, tabId, request.baselineAssistantCount, request.baselineAssistantTurnKey);
     case 'generationStarted':
       return coordinator.confirmGenerationStarted(request.key, tabId, request.itemId, request.dispatchToken, request.controlObserved);
     case 'waitingStable':

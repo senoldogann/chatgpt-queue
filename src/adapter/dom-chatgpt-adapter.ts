@@ -137,29 +137,47 @@ const hasConfirmation = (document: Document): boolean => {
 const assistantTurnRoot = (message: HTMLElement): HTMLElement =>
   message.closest<HTMLElement>('[data-testid^="conversation-turn-"], [data-turn-id], [data-turn="assistant"]') ?? message;
 
-const assistantState = (document: Document): { count: number; completionControlPresent: boolean } => {
+const assistantState = (document: Document): { count: number; completionControlPresent: boolean; latestTurnKey?: string } => {
   const messages = [...document.querySelectorAll<HTMLElement>(ASSISTANT_SELECTOR)];
   const latestMessage = messages.at(-1);
   if (!latestMessage) return { count: 0, completionControlPresent: false };
   const latestTurn = assistantTurnRoot(latestMessage);
   const completionControl = firstWithin<HTMLButtonElement>(latestTurn, ASSISTANT_COMPLETION_SELECTORS);
-  return { count: messages.length, completionControlPresent: Boolean(completionControl && !isDisabled(completionControl)) };
+  return {
+    count: messages.length,
+    completionControlPresent: Boolean(completionControl && !isDisabled(completionControl)),
+    latestTurnKey: assistantObservationKey(latestTurn, latestMessage, messages.length),
+  };
 };
 
-const assistantTurnKey = (turn: HTMLElement, message: HTMLElement, index: number): string => {
-  const candidate = [
+const assistantStableTurnKey = (turn: HTMLElement, message: HTMLElement): string | undefined =>
+  [
     turn.getAttribute('data-turn-id'),
     message.getAttribute('data-message-id'),
     turn.getAttribute('data-testid'),
     turn.id,
   ].find((value): value is string => Boolean(value?.trim()));
-  return candidate ?? `assistant:${index}`;
-};
+
+const assistantTurnKey = (turn: HTMLElement, message: HTMLElement, index: number): string =>
+  assistantStableTurnKey(turn, message) ?? `assistant:${index}`;
+
+const assistantObservationKey = (turn: HTMLElement, message: HTMLElement, index: number): string =>
+  assistantStableTurnKey(turn, message) ?? `assistant:${index}:${assistantTextFingerprint(message)}`;
 
 const assistantText = (message: HTMLElement): string => {
   const clone = message.cloneNode(true) as HTMLElement;
   clone.querySelectorAll('button, script, style, [aria-hidden="true"], [data-testid*="copy" i]').forEach((element) => element.remove());
   return (clone.textContent ?? '').replace(/\s+/g, ' ').trim();
+};
+
+const assistantTextFingerprint = (message: HTMLElement): string => {
+  const text = assistantText(message);
+  const bounded = `${text.length}:${text.slice(0, 256)}:${text.slice(-256)}`;
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < bounded.length; index += 1) {
+    hash = Math.imul(hash ^ bounded.charCodeAt(index), 0x01000193);
+  }
+  return (hash >>> 0).toString(36);
 };
 
 export class DOMChatGPTAdapter implements ChatGPTAdapter {
@@ -178,6 +196,7 @@ export class DOMChatGPTAdapter implements ChatGPTAdapter {
       composerReady: composerReady(composer),
       sendControlPresent: Boolean(send),
       assistantMessageCount: assistant.count,
+      ...(assistant.latestTurnKey === undefined ? {} : { latestAssistantTurnKey: assistant.latestTurnKey }),
       assistantCompletionControlPresent: assistant.completionControlPresent,
       domStable,
       confirmationVisible: hasConfirmation(this.document),
