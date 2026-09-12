@@ -20,6 +20,7 @@ await build({
   sourcemap: false,
   minify: false,
   legalComments: 'none',
+  define: { __FLOWRUN_E2E__: 'false' },
 });
 
 await cp(resolve(root, 'manifest.json'), resolve(outdir, 'manifest.json'));

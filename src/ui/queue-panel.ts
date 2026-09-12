@@ -15,12 +15,14 @@ export interface QueuePanelActions {
   loadWorkflow?: (text: string) => MaybePromise;
   runWorkflow?: (inputs: Record<string, string>) => MaybePromise;
   clearWorkflow?: () => MaybePromise;
+  enableBridge?: () => MaybePromise;
 }
 
 export interface QueuePanelWorkflowView {
   workflow?: WorkflowDefinition;
   run?: WorkflowRun;
   error?: string;
+  bridgeState?: 'disabled' | 'enabling' | 'connected' | 'disconnected';
 }
 
 const PANEL_COLLAPSED_KEY = 'chatgpt-queue:panel-collapsed';
@@ -73,6 +75,7 @@ const visualSignature = (queue: ConversationQueue, notice: string | undefined, w
     steps: workflowView.run.steps.map((step) => ({ id: step.id, status: step.status, error: step.error ?? null })),
   } : null,
   workflowError: workflowView.error ?? null,
+  bridgeState: workflowView.bridgeState ?? 'disabled',
 });
 
 export class QueuePanel {
@@ -156,6 +159,8 @@ export class QueuePanel {
     const flowRun = workflowView.run;
     const queueBusy = queue.items.some((item) => ['queued', 'sending', 'running'].includes(item.state));
     const flowRunRunning = flowRun?.status === 'running';
+    const isActive = queue.status === 'running' || flowRunRunning;
+    const bridgeState = workflowView.bridgeState ?? 'disabled';
     const completedSteps = flowRun?.steps.filter((step) => step.status === 'completed').length ?? 0;
     const activeStep = flowRun?.steps.find((step) => ['ready', 'dispatching', 'waiting', 'blocked', 'failed'].includes(step.status))
       ?? flowRun?.steps.find((step) => step.status === 'pending');
@@ -197,6 +202,10 @@ export class QueuePanel {
           ${workflowError}
           <label class="workflow-file-button">Load workflow<input data-role="workflow-file" type="file" accept=".json,.flowrun.json,application/json" /></label>
         </section>`;
+    const bridgeControl = bridgeState === 'connected'
+      ? '<div class="bridge-row"><span>CLI bridge</span><span class="bridge-state connected">Connected</span></div>'
+      : `<div class="bridge-row"><span>CLI bridge</span><span class="bridge-state">${bridgeState === 'enabling' ? 'Enabling…' : bridgeState === 'disconnected' ? 'Disconnected' : 'Disabled'}</span><button class="ghost" data-action="enable-bridge"${bridgeState === 'enabling' ? ' disabled' : ''}>${bridgeState === 'disabled' ? 'Enable' : 'Reconnect'}</button></div>`;
+
 
     this.root.innerHTML = `
       <style>
@@ -295,6 +304,19 @@ export class QueuePanel {
           box-shadow: 0 0 0 3px rgba(255,255,255,.04);
         }
         .status-running::before { background: #d7d7d7; }
+        .status.activity::before { display: none; }
+        .activity-spinner {
+          display: inline-block;
+          width: 12px;
+          height: 12px;
+          flex: 0 0 12px;
+          border: 2px solid rgba(255,255,255,.25);
+          border-top-color: #f2f2f2;
+          border-radius: 999px;
+          animation: queue-spin .75s linear infinite;
+        }
+        @keyframes queue-spin { to { transform: rotate(360deg); } }
+        @media (prefers-reduced-motion: reduce) { .activity-spinner { animation: none; } }
         .status-blocked::before { background: #ff8b8b; }
         .status-completed::before { background: #9fd3a9; }
         .body { padding: 12px; max-height: min(65vh, 640px); overflow: auto; }
@@ -424,6 +446,19 @@ export class QueuePanel {
         }
         .workflow-file-button:hover { background: rgba(255,255,255,.06); }
         .workflow-file-button input { display: none; }
+        .bridge-row {
+          margin-top: 12px;
+          padding-top: 10px;
+          border-top: 1px solid rgba(255,255,255,.08);
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          color: #aaa;
+          font-size: 11px;
+        }
+        .bridge-row > :first-child { color: #ddd; font-weight: 600; }
+        .bridge-state { margin-left: auto; }
+        .bridge-state.connected { color: #9fd3a9; }
         @media (max-width: 520px) {
           .dock { right: 8px; bottom: 8px; width: calc(100vw - 16px); }
           .body { max-height: 58vh; }
@@ -439,7 +474,7 @@ export class QueuePanel {
               <span class="count">${pending}</span>
             </div>
             <div class="header-actions">
-              <span class="status status-${escapeHtml(queue.status)}">${statusLabel(queue.status)}</span>
+              <span class="status status-${escapeHtml(queue.status)}${isActive ? ' activity' : ''}">${isActive ? '<span class="activity-spinner" data-role="activity-spinner" aria-label="Queue running"></span>' : ''}${statusLabel(queue.status)}</span>
               <button class="ghost icon" data-action="hide" aria-label="Hide queue" title="Hide queue">→</button>
             </div>
           </header>
@@ -453,9 +488,10 @@ export class QueuePanel {
             </div>
             ${rows ? `<ul>${rows}</ul>` : '<div class="empty">No queued messages.</div>'}
             ${workflowSection}
+            ${bridgeControl}
           </div>
         </section>
-        <button class="peek" data-action="show" aria-label="Show queue"><span>‹</span><strong>Queue · ${pending}</strong></button>
+        <button class="peek" data-action="show" aria-label="Show queue">${isActive ? '<span class="activity-spinner" data-role="activity-spinner-collapsed" aria-hidden="true"></span>' : ''}<span>‹</span><strong>Queue · ${pending}</strong></button>
       </div>`;
 
     if (sameConversation) {
@@ -526,6 +562,7 @@ export class QueuePanel {
     });
 
     this.root.querySelector('[data-action="clear-workflow"]')?.addEventListener('click', () => invoke(this.actions.clearWorkflow));
+    this.root.querySelector('[data-action="enable-bridge"]')?.addEventListener('click', () => invoke(this.actions.enableBridge));
     this.root.querySelector('[data-action="run-workflow"]')?.addEventListener('click', () => {
       if (!this.actions.runWorkflow) return;
       const inputs: Record<string, string> = {};

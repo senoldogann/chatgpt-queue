@@ -154,3 +154,56 @@ test('blocks an interrupted browser run after reload and never resends the activ
   expect(await sentEvents(page, 'flowrun-reload')).toHaveLength(1);
   await expect(queueRoot(page)).toContainText('browser-session-interrupted');
 });
+
+
+test('runs an accepted bridge workflow after the CLI side detaches and ignores duplicate delivery', async ({ extensionContext, extensionWorker }) => {
+  const page = await openFixture(extensionContext, '/c/bridge-detach?response=bridge%20review&response=bridge%20tests');
+  const root = queueRoot(page);
+  await expect.poll(() => root.getAttribute('data-flowrun-bridge-target')).not.toBeNull();
+  const targetId = await root.getAttribute('data-flowrun-bridge-target');
+  expect(targetId).toBeTruthy();
+
+  const jobId = '123e4567-e89b-42d3-a456-426614174099';
+  await extensionWorker.evaluate(async ({ jobId, targetId }) => {
+    await chrome.storage.local.set({
+      flowrunBridgeJobs: {
+        version: 1,
+        jobs: {
+          [jobId]: {
+            version: 1, jobId, kind: 'run', targetId, conversationKey: 'conv:bridge-detach',
+            status: 'accepted', createdAt: Date.now(), updatedAt: Date.now(),
+          },
+        },
+        order: [jobId],
+      },
+    });
+  }, { jobId, targetId: targetId! });
+
+  const sendBridgeRun = () => extensionWorker.evaluate(async ({ jobId, targetId, workflow }) => {
+    const tabs = await chrome.tabs.query({ url: 'http://127.0.0.1/*' });
+    const tabId = tabs.find((tab) => tab.id !== undefined)?.id;
+    if (tabId === undefined) throw new Error('fixture-tab-not-found');
+    return chrome.tabs.sendMessage(tabId, { type: 'bridgeRun', jobId, targetId, workflow, inputs: { topic: 'unattended' } });
+  }, { jobId, targetId: targetId!, workflow: chainedWorkflow });
+
+  expect(await sendBridgeRun()).toMatchObject({ ok: true });
+  await expect.poll(async () => (await sentEvents(page, 'bridge-detach')).length).toBe(1);
+  expect((await sentEvents(page, 'bridge-detach'))[0]?.content).toBe('Analyze unattended');
+
+  // Simulate the CLI being gone: no further bridge/CLI interaction occurs.
+  await page.locator('#fixture-complete').click();
+  await expect.poll(async () => (await sentEvents(page, 'bridge-detach')).length).toBe(2);
+  expect((await sentEvents(page, 'bridge-detach'))[1]?.content).toBe('Write tests using: bridge review');
+  await page.locator('#fixture-complete').click();
+
+  await expect.poll(async () => (await latestFlowRun(extensionWorker))?.status).toBe('completed');
+  const bridgeRecord = await extensionWorker.evaluate(async (jobId) => {
+    const data = await chrome.storage.local.get('flowrunBridgeJobs');
+    return (data.flowrunBridgeJobs as any)?.jobs?.[jobId] ?? null;
+  }, jobId);
+  expect(bridgeRecord).toMatchObject({ status: 'completed', workflowRunId: expect.any(String) });
+
+  expect(await sendBridgeRun()).toMatchObject({ ok: true });
+  await page.waitForTimeout(600);
+  expect(await sentEvents(page, 'bridge-detach')).toHaveLength(2);
+});
