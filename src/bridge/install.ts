@@ -1,8 +1,7 @@
 import { chmod, copyFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
-
-export const NATIVE_HOST_NAME = 'com.senoldogan.flowrun';
+import { NATIVE_HOST_NAME } from './protocol';
 const EXTENSION_ID = /^[a-p]{32}$/;
 
 export interface InstallNativeBridgeOptions {

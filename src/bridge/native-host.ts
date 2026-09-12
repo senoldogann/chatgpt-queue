@@ -24,6 +24,8 @@ const emit = (value: unknown): void => {
   process.stdout.write(encodeNativeMessage(value));
 };
 
+emit({ type: 'bridge.hello', version: 1, secret: config.secret });
+
 const poll = async (): Promise<void> => {
   const requests = await mailbox.listRequests();
   for (const request of requests) {

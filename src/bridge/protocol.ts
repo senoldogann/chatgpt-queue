@@ -1,6 +1,7 @@
 import { validateWorkflowDocument, type WorkflowDefinition } from '../flowrun/schema';
 
 export const BRIDGE_PROTOCOL_VERSION = 1 as const;
+export const NATIVE_HOST_NAME = 'com.senoldogan.flowrun';
 export const MAX_BRIDGE_REQUEST_BYTES = 1024 * 1024;
 export const DEFAULT_BRIDGE_REQUEST_TTL_MS = 10 * 60 * 1000;
 
@@ -58,7 +59,7 @@ export interface BridgeTarget {
 }
 
 export type BridgeJobResult =
-  | { version: 1; jobId: string; kind: 'targets'; status: 'completed'; targets: BridgeTarget[] }
+  | { version: 1; jobId: string; kind: 'targets'; status: 'completed'; targets: BridgeTarget[]; error?: string }
   | { version: 1; jobId: string; kind: 'run'; status: BridgeJobStatus; record?: BridgeJobRecord; error?: string };
 
 export type BridgeValidationResult =

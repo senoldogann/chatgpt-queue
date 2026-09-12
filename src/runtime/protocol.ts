@@ -17,6 +17,26 @@ export type BackgroundRequest =
   | { type: 'block'; key: string; reason: string }
   | { type: 'migrate'; fromKey: string; toKey: string };
 
+export type BridgeControlRequest =
+  | {
+      type: 'bridgeRegister';
+      conversationKey: string;
+      queueStatus: 'idle' | 'running' | 'paused' | 'blocked' | 'completed';
+      workflowStatus?: 'pending' | 'running' | 'blocked' | 'completed' | 'failed';
+      busy: boolean;
+    }
+  | { type: 'bridgeState' }
+  | { type: 'bridgeEnable' }
+  | {
+      type: 'bridgeJobUpdate';
+      jobId: string;
+      status: 'accepted' | 'running' | 'blocked' | 'completed' | 'failed';
+      workflowRunId?: string;
+      error?: string;
+    };
+
+export type ExtensionRequest = BackgroundRequest | BridgeControlRequest;
+
 export interface BackgroundEnvelope {
   ok: boolean;
   data?: unknown;

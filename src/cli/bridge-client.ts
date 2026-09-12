@@ -84,7 +84,7 @@ export class NodeBridgeClient implements BridgeCliApi {
     const request: BridgeJobRequest = { ...base, kind: 'targets', payload: {} };
     await this.mailbox.submit(request);
     const result = await this.waitForObserved(request.jobId, 5_000);
-    if (result.kind !== 'targets' || result.status !== 'completed') throw new Error('bridge-targets-failed');
+    if (result.kind !== 'targets' || result.status !== 'completed' || result.error) throw new Error(result.kind === 'targets' && result.error ? result.error : 'bridge-targets-failed');
     return result.targets;
   }
 

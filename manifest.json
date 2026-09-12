@@ -3,20 +3,32 @@
   "name": "ChatGPT Queue",
   "version": "0.1.0",
   "description": "Queue follow-up messages per ChatGPT conversation and send them only after the current run safely completes.",
-  "permissions": ["storage", "notifications"],
-  "host_permissions": ["https://chatgpt.com/*"],
+  "permissions": [
+    "storage",
+    "notifications"
+  ],
+  "host_permissions": [
+    "https://chatgpt.com/*"
+  ],
   "background": {
     "service_worker": "background.js",
     "type": "module"
   },
   "content_scripts": [
     {
-      "matches": ["https://chatgpt.com/*"],
-      "js": ["content.js"],
+      "matches": [
+        "https://chatgpt.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
       "run_at": "document_idle"
     }
   ],
   "icons": {
     "128": "icon128.png"
-  }
+  },
+  "optional_permissions": [
+    "nativeMessaging"
+  ]
 }
