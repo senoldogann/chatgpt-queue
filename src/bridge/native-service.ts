@@ -162,17 +162,23 @@ export class NativeBridgeService {
     }
 
     const at = this.now();
-    const accepted = await this.deps.repository.accept({
-      version: 1,
-      jobId: request.jobId,
-      kind: 'run',
-      targetId,
-      conversationKey: target.conversationKey,
-      ownerTabId: target.tabId,
-      status: 'accepted',
-      createdAt: at,
-      updatedAt: at,
-    });
+    let accepted: { record: BridgeJobRecord; created: boolean };
+    try {
+      accepted = await this.deps.repository.accept({
+        version: 1,
+        jobId: request.jobId,
+        kind: 'run',
+        targetId,
+        conversationKey: target.conversationKey,
+        ownerTabId: target.tabId,
+        status: 'accepted',
+        createdAt: at,
+        updatedAt: at,
+      });
+    } catch (error) {
+      this.postError(request.jobId, 'run', error instanceof Error ? error.message : String(error));
+      return;
+    }
     this.postRecord(accepted.record);
     if (!accepted.created) return;
 

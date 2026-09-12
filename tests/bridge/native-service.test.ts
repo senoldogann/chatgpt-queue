@@ -196,6 +196,36 @@ describe('NativeBridgeService', () => {
     expect(port.sent.some((message: any) => message.error === 'bridge.expired')).toBe(false);
   });
 
+  it('durably rejects a second job for the same conversation even when the target registry is still stale-idle', async () => {
+    const storage = new MemoryStorage();
+    const repo = new BridgeJobRepository(storage);
+    const port = new FakePort();
+    const registry = new TargetRegistry({ idFactory: () => 'opaque' });
+    registry.register(9, { conversationKey: 'conv:a', queueStatus: 'completed', busy: false }, 1_000);
+    const route = vi.fn(async () => ({ ok: true }));
+    const service = new NativeBridgeService({
+      hasPermission: async () => true,
+      requestPermission: async () => true,
+      connectNative: () => port,
+      repository: repo,
+      registry,
+      routeToTab: route,
+      now: () => 2_000,
+    });
+    await service.ensureConnected();
+    port.emit({ type: 'bridge.hello', version: 1, secret: 'a'.repeat(64) });
+    port.emit(runRequest);
+    await vi.waitFor(() => expect(route).toHaveBeenCalledTimes(1));
+
+    const secondJobId = '123e4567-e89b-42d3-a456-426614174001';
+    port.sent.length = 0;
+    port.emit({ ...runRequest, jobId: secondJobId });
+
+    await vi.waitFor(() => expect(port.sent.some((message: any) => message.jobId === secondJobId && message.error === 'bridge.target-busy')).toBe(true));
+    expect(route).toHaveBeenCalledTimes(1);
+    expect(await repo.get(secondJobId)).toBeUndefined();
+  });
+
   it('rejects requests before handshake or with the wrong secret', async () => {
     const port = new FakePort();
     const route = vi.fn();
