@@ -18,6 +18,7 @@ The extension advances the queue by observing the real ChatGPT page state. It do
 - Different conversations can run independently in different tabs.
 - Temporary new-chat queue keys migrate to the real conversation ID after ChatGPT assigns one.
 - Local completion/blocked notifications.
+- CSS-only running activity indicator in both expanded and collapsed Queue UI.
 
 ## Requirements
 
@@ -45,11 +46,11 @@ npm run build
 
 The production extension is written to `dist/`.
 
-## FlowRun v0.2 live browser runtime
+## FlowRun v0.3 unattended CLI bridge
 
-This repository also contains **FlowRun**, a local-first deterministic workflow runtime for AI web workflows. FlowRun v0.2 can execute validated multi-step workflows directly inside the extension against the **current ChatGPT conversation**, while reusing the same fail-closed queue runner, ownership leases, dispatch reservations, completion detection, and recovery rules as normal queued messages.
+FlowRun is a local-first deterministic workflow runtime built on top of the same fail-closed ChatGPT Queue engine. v0.3 adds **durable CLI submission**: after the extension accepts a job, the CLI is no longer the workflow controller. You can close the terminal or use `--detach`; the extension continues the workflow locally as long as **Chrome remains open, the target ChatGPT tab remains available, and the computer stays awake**.
 
-A workflow can chain assistant output into later prompts:
+The runtime still supports direct extension execution through **Workflow → Load workflow**. A workflow can chain completed assistant output into later prompts:
 
 ```json
 {
@@ -75,24 +76,66 @@ A workflow can chain assistant output into later prompts:
 }
 ```
 
-In the Queue panel, use **Workflow → Load workflow**, select a `.flowrun.json` or JSON workflow, fill required inputs, and choose **Run workflow**. FlowRun sends exactly one workflow step at a time through the existing queue path, captures the completed assistant response locally, persists run receipts/events, and then renders the next step.
-
-A live workflow refuses to start while normal queue items are queued/sending/running. If a page reload or extension restart interrupts an active workflow, the persisted run becomes `blocked: browser-session-interrupted`; it is never automatically resent. ChatGPT's `Message delivery timed out. Please try again.` UI is classified as `message-delivery-timeout` and also remains fail-closed with no automatic retry.
-
-FlowRun run history is stored separately in `chrome.storage.local` and is bounded to the 20 most recent runs. Workflow definitions, inputs, captured outputs, and receipts remain local; there is no telemetry, backend, API-key requirement, or external workflow service.
-
-The developer CLI remains useful for authoring and inspection:
+### Build the developer tools
 
 ```bash
 npm run build:cli
-./dist-cli/flowrun.js validate examples/review-pr.flowrun.json
-./dist-cli/flowrun.js dry-run examples/review-pr.flowrun.json --input 'diff=example change'
-./dist-cli/flowrun.js inspect run.json
+npm run build:native-host
 ```
 
-There is deliberately **no CLI-to-browser `flowrun run` transport yet**. Live execution is extension-driven in v0.2; CLI↔browser IPC is deferred until the browser runtime has accumulated more real-world reliability evidence.
+### Install the local CLI bridge (macOS + Chrome developer install)
 
-See `docs/superpowers/specs/2026-09-12-flowrun-v0.2-live-browser-design.md` for the live-runtime architecture and `examples/review-pr.flowrun.json` for a complete workflow example.
+1. Build the production extension and load `dist/` unpacked in Chrome.
+2. Copy the extension ID shown on `chrome://extensions`.
+3. Build the CLI and native host.
+4. Install the host manifest for that exact extension ID:
+
+```bash
+./dist-cli/flowrun.js bridge install --extension-id <chrome-extension-id>
+./dist-cli/flowrun.js bridge doctor
+```
+
+The installer creates a user-local bridge under `~/.flowrun/bridge/` and a Chrome Native Messaging manifest under your user Chrome profile support directory. It does **not** start a daemon or open a localhost port. The host accepts only the configured extension origin.
+
+In the Queue panel, click **Enable** next to **CLI bridge**. This explicitly grants Chrome's optional `nativeMessaging` permission. Normal Queue use does not require that permission.
+
+### Run unattended workflows
+
+List currently registered ChatGPT conversations:
+
+```bash
+./dist-cli/flowrun.js targets
+```
+
+Submit a workflow:
+
+```bash
+./dist-cli/flowrun.js run examples/review-pr.flowrun.json \
+  --input 'diff=example change' \
+  --detach
+```
+
+If exactly one eligible ChatGPT target is available it is selected automatically. If several are available, FlowRun fails closed and requires `--target <target-id>`. Busy targets are never selected automatically.
+
+After the CLI prints `Accepted: <job-id>`, execution belongs to the extension. The terminal can exit without cancelling or duplicating the run. Inspect it later with:
+
+```bash
+./dist-cli/flowrun.js status <job-id>
+```
+
+This unattended boundary is intentionally narrow: **Chrome must remain running and the Mac must remain awake**. v0.3 does not wake a sleeping computer, auto-launch Chrome after shutdown, remotely monitor the run, or automatically retry ambiguous ChatGPT sends. A browser/tab reload during an active workflow remains fail-closed as `browser-session-interrupted`.
+
+The bridge uses an atomic local mailbox plus Chrome Native Messaging. Requests are versioned, capped at 1 MiB, expire after 10 minutes if not accepted, and use idempotent job IDs. The extension stores at most 50 bridge jobs, FlowRun stores the 20 most recent runs, and the local completed mailbox history is count-bounded. No workflow can execute shell commands through the bridge.
+
+### Runtime behavior
+
+FlowRun sends exactly one step at a time through the existing QueueCoordinator → QueueRunner → ChatGPT DOM adapter path. Completed assistant text is captured locally and can be referenced as `{{ steps.<id>.output }}`. A normal Queue that is already active prevents a FlowRun workflow from starting.
+
+ChatGPT's `Message delivery timed out. Please try again.` state is classified as `message-delivery-timeout` and remains fail-closed without automatic retry. Reload/restart ambiguity, confirmation UI, network errors, and uncertain sends remain fail-closed as well.
+
+The Queue panel shows a CSS-only activity spinner while Queue or FlowRun execution is running, including on the collapsed right-edge tab. The spinner stops for Idle, Paused, Blocked, Completed, and Failed states and honors `prefers-reduced-motion`.
+
+See `docs/superpowers/specs/2026-09-12-flowrun-v0.3-unattended-cli-bridge-design.md` for the bridge architecture.
 
 ## Tests
 
@@ -173,6 +216,7 @@ The production manifest requests:
 - `storage` — durable local queue state.
 - `notifications` — local completion/blocked notifications.
 - Host access only to `https://chatgpt.com/*`.
+- Optional `nativeMessaging` — requested only when the user explicitly enables the FlowRun CLI bridge.
 
 The project does not read browser cookies or credentials, call the OpenAI API, send telemetry, or contact an external backend.
 
@@ -192,11 +236,13 @@ The project does not read browser cookies or credentials, call the OpenAI API, s
 - `src/runtime/` — extension RPC/client/runner and conversation identity.
 - `src/ui/` — Shadow DOM queue panel.
 - `src/flowrun/` — FlowRun schema, templates, receipts, assertions, deterministic engine, bounded run storage, and queue-backed browser runtime.
-- `src/cli/` — FlowRun CLI commands and Node filesystem adapter.
+- `src/cli/` — FlowRun CLI commands and local mailbox client.
+- `src/bridge/` — Native Messaging protocol, installer, mailbox, target registry, and unattended job handoff.
 - `examples/` — FlowRun workflow examples.
 - `e2e/` — deterministic Chromium extension tests.
 - `scripts/build.mjs` — production build.
 - `scripts/build-cli.mjs` — Node CLI build.
+- `scripts/build-native-host.mjs` — local Native Messaging host build.
 - `scripts/build-e2e.mjs` — test-only extension build.
 
 ## Verification
@@ -208,5 +254,6 @@ npm test
 npm run typecheck
 npm run build
 npm run build:cli
+npm run build:native-host
 npm run test:e2e
 ```

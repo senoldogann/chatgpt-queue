@@ -267,6 +267,36 @@ test('sends one item at a time and ignores duplicate completion mutations', asyn
   expect(queue.items.map((item: any) => item.state)).toEqual(['completed', 'completed']);
 });
 
+
+test('shows the activity spinner only while execution is active', async ({ extensionContext, extensionWorker }) => {
+  const page = await openFixture(extensionContext, '/c/activity-spinner');
+  const root = queueRoot(page);
+  await addMessage(page, 'spinner-first');
+  await addMessage(page, 'spinner-second');
+  await expect(root.locator('[data-role="activity-spinner"]')).toHaveCount(0);
+
+  await startQueue(page);
+  await expect.poll(async () => (await sentEvents(page, 'activity-spinner')).length).toBe(1);
+  await expect(root.locator('[data-role="activity-spinner"]')).toHaveCount(1);
+
+  await root.locator('[data-action="hide"]').click();
+  await expect(root.locator('[data-role="activity-spinner-collapsed"]')).toHaveCount(1);
+  await root.locator('[data-action="show"]').click();
+
+  await root.locator('[data-action="pause"]').click();
+  await expect(root.locator('[data-role="activity-spinner"]')).toHaveCount(0);
+  await page.locator('#fixture-complete').click();
+  await expect.poll(async () => (await storedQueue(extensionWorker, 'conv:activity-spinner'))?.items?.[0]?.state).toBe('completed');
+  await expect(root.locator('[data-role="activity-spinner"]')).toHaveCount(0);
+
+  await root.locator('[data-action="resume"]').click();
+  await expect.poll(async () => (await sentEvents(page, 'activity-spinner')).length).toBe(2);
+  await expect(root.locator('[data-role="activity-spinner"]')).toHaveCount(1);
+  await page.locator('#fixture-complete').click();
+  await expect.poll(async () => (await storedQueue(extensionWorker, 'conv:activity-spinner'))?.status).toBe('completed');
+  await expect(root.locator('[data-role="activity-spinner"]')).toHaveCount(0);
+});
+
 test('pause lets the active response finish but does not dispatch the next item until resume', async ({ extensionContext, extensionWorker }) => {
   const page = await openFixture(extensionContext, '/c/pause');
   await addMessage(page, 'pause-first');
