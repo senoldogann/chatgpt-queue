@@ -1,3 +1,4 @@
+import { decideBridgeJobOwnership } from './bridge/job-authorization';
 import { BridgeJobRepository, chromeBridgeStorageArea } from './bridge/job-repository';
 import { NativeBridgeService, type NativePortLike } from './bridge/native-service';
 import { TargetRegistry } from './bridge/target-registry';
@@ -55,10 +56,13 @@ const handleBridgeRequest = async (request: BridgeControlRequest, tabId: number)
     case 'bridgeEnable':
       return { enabled: await nativeBridge.enable(), state: nativeBridge.state() };
     case 'bridgeJobUpdate': {
-      const record = await bridgeRepository.get(request.jobId);
+      let record = await bridgeRepository.get(request.jobId);
       if (!record) throw new Error('bridge-job-not-found');
-      const target = targetRegistry.resolve(record.targetId);
-      if (!target || target.tabId !== tabId) throw new Error('bridge-target-owner-mismatch');
+      const queue = record.ownerTabId === undefined ? await coordinator.get(record.conversationKey) : undefined;
+      const ownership = decideBridgeJobOwnership(record, tabId, queue?.owner?.tabId);
+      if (ownership.kind === 'bind-owner') {
+        record = await bridgeRepository.bindOwner(request.jobId, ownership.ownerTabId);
+      }
       return nativeBridge.publishJobUpdate(request.jobId, {
         status: request.status,
         ...(request.workflowRunId === undefined ? {} : { workflowRunId: request.workflowRunId }),

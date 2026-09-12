@@ -97,13 +97,21 @@ export class NativeBridgeService {
       this.postError(identity.jobId, identity.kind, 'bridge.handshake-required');
       return;
     }
-    const validated = validateBridgeRequest(raw, this.now(), this.expectedSecret);
+
+    // Authenticate and structurally validate first, but defer TTL rejection for run jobs
+    // until after idempotent lookup. Accepted jobs remain replayable after request expiry.
+    const validated = validateBridgeRequest(raw, this.now(), this.expectedSecret, { allowExpired: true });
     if (!validated.ok) {
       this.postError(identity.jobId, identity.kind, validated.error);
       return;
     }
     const request = validated.value;
+
     if (request.kind === 'targets') {
+      if (request.expiresAt <= this.now()) {
+        this.postError(request.jobId, 'targets', 'bridge.expired');
+        return;
+      }
       this.port?.postMessage({
         version: 1,
         jobId: request.jobId,
@@ -111,6 +119,16 @@ export class NativeBridgeService {
         status: 'completed',
         targets: this.deps.registry.list(this.now()),
       } satisfies BridgeJobResult);
+      return;
+    }
+
+    const existing = await this.deps.repository.get(request.jobId);
+    if (existing) {
+      this.postRecord(existing);
+      return;
+    }
+    if (request.expiresAt <= this.now()) {
+      this.postError(request.jobId, 'run', 'bridge.expired');
       return;
     }
     await this.acceptRun(request);
@@ -121,7 +139,7 @@ export class NativeBridgeService {
     patch: Partial<Pick<BridgeJobRecord, 'status' | 'workflowRunId' | 'error' | 'updatedAt'>>,
   ): Promise<BridgeJobRecord> {
     const record = await this.deps.repository.update(jobId, { ...patch, updatedAt: patch.updatedAt ?? this.now() });
-    this.port?.postMessage({ version: 1, jobId, kind: 'run', status: record.status, record } satisfies BridgeJobResult);
+    this.postRecord(record);
     return record;
   }
 
@@ -133,10 +151,12 @@ export class NativeBridgeService {
     }
     const target = this.deps.registry.resolve(targetId, this.now());
     if (!target) {
+      if (await this.postExistingIfPresent(request.jobId)) return;
       this.postError(request.jobId, 'run', 'bridge.target-unavailable');
       return;
     }
     if (target.busy) {
+      if (await this.postExistingIfPresent(request.jobId)) return;
       this.postError(request.jobId, 'run', 'bridge.target-busy');
       return;
     }
@@ -148,17 +168,12 @@ export class NativeBridgeService {
       kind: 'run',
       targetId,
       conversationKey: target.conversationKey,
+      ownerTabId: target.tabId,
       status: 'accepted',
       createdAt: at,
       updatedAt: at,
     });
-    this.port?.postMessage({
-      version: 1,
-      jobId: request.jobId,
-      kind: 'run',
-      status: accepted.record.status,
-      record: accepted.record,
-    } satisfies BridgeJobResult);
+    this.postRecord(accepted.record);
     if (!accepted.created) return;
 
     try {
@@ -179,6 +194,23 @@ export class NativeBridgeService {
         error: error instanceof Error ? error.message : String(error),
       });
     }
+  }
+
+  private async postExistingIfPresent(jobId: string): Promise<boolean> {
+    const existing = await this.deps.repository.get(jobId);
+    if (!existing) return false;
+    this.postRecord(existing);
+    return true;
+  }
+
+  private postRecord(record: BridgeJobRecord): void {
+    this.port?.postMessage({
+      version: 1,
+      jobId: record.jobId,
+      kind: 'run',
+      status: record.status,
+      record,
+    } satisfies BridgeJobResult);
   }
 
   private postError(jobId: string | undefined, kind: 'targets' | 'run' | undefined, error: string): void {

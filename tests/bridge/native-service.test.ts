@@ -55,6 +55,26 @@ describe('NativeBridgeService', () => {
     expect(connect).not.toHaveBeenCalled();
   });
 
+  it('requests optional nativeMessaging permission only when explicitly enabled', async () => {
+    const port = new FakePort();
+    let granted = false;
+    const requestPermission = vi.fn(async () => { granted = true; return true; });
+    const connectNative = vi.fn(() => port);
+    const service = new NativeBridgeService({
+      hasPermission: async () => granted,
+      requestPermission,
+      connectNative,
+      repository: new BridgeJobRepository(new MemoryStorage()),
+      registry: new TargetRegistry(),
+      routeToTab: vi.fn(),
+      now: () => 2_000,
+    });
+
+    expect(await service.enable()).toBe(true);
+    expect(requestPermission).toHaveBeenCalledTimes(1);
+    expect(connectNative).toHaveBeenCalledTimes(1);
+  });
+
   it('connects to the exact native host and answers targets after secret handshake', async () => {
     const port = new FakePort();
     const registry = new TargetRegistry({ idFactory: () => 'opaque' });
@@ -105,6 +125,75 @@ describe('NativeBridgeService', () => {
     port.emit(runRequest);
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(route).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns the persisted job on redelivery even when the target is now busy', async () => {
+    const storage = new MemoryStorage();
+    const repo = new BridgeJobRepository(storage);
+    const port = new FakePort();
+    const registry = new TargetRegistry({ idFactory: () => 'opaque' });
+    registry.register(9, { conversationKey: 'conv:a', queueStatus: 'completed', busy: false }, 1_000);
+    const route = vi.fn(async () => ({ ok: true }));
+    const service = new NativeBridgeService({
+      hasPermission: async () => true,
+      requestPermission: async () => true,
+      connectNative: () => port,
+      repository: repo,
+      registry,
+      routeToTab: route,
+      now: () => 2_000,
+    });
+    await service.ensureConnected();
+    port.emit({ type: 'bridge.hello', version: 1, secret: 'a'.repeat(64) });
+    port.emit(runRequest);
+    await vi.waitFor(() => expect(route).toHaveBeenCalledTimes(1));
+
+    registry.register(9, { conversationKey: 'conv:a', queueStatus: 'running', busy: true }, 2_100);
+    port.sent.length = 0;
+    port.emit(runRequest);
+
+    await vi.waitFor(() => expect(port.sent.some((message: any) =>
+      message.jobId === runRequest.jobId
+      && message.kind === 'run'
+      && message.status === 'accepted'
+      && message.error === undefined)).toBe(true));
+    expect(route).toHaveBeenCalledTimes(1);
+    expect(port.sent.some((message: any) => message.error === 'bridge.target-busy')).toBe(false);
+  });
+
+  it('returns an already accepted job after its request TTL has expired', async () => {
+    let now = 2_000;
+    const storage = new MemoryStorage();
+    const repo = new BridgeJobRepository(storage);
+    const port = new FakePort();
+    const registry = new TargetRegistry({ idFactory: () => 'opaque' });
+    registry.register(9, { conversationKey: 'conv:a', queueStatus: 'completed', busy: false }, 1_000);
+    const route = vi.fn(async () => ({ ok: true }));
+    const service = new NativeBridgeService({
+      hasPermission: async () => true,
+      requestPermission: async () => true,
+      connectNative: () => port,
+      repository: repo,
+      registry,
+      routeToTab: route,
+      now: () => now,
+    });
+    await service.ensureConnected();
+    port.emit({ type: 'bridge.hello', version: 1, secret: 'a'.repeat(64) });
+    port.emit(runRequest);
+    await vi.waitFor(() => expect(route).toHaveBeenCalledTimes(1));
+
+    now = runRequest.expiresAt + 1;
+    port.sent.length = 0;
+    port.emit(runRequest);
+
+    await vi.waitFor(() => expect(port.sent.some((message: any) =>
+      message.jobId === runRequest.jobId
+      && message.kind === 'run'
+      && message.status === 'accepted'
+      && message.error === undefined)).toBe(true));
+    expect(route).toHaveBeenCalledTimes(1);
+    expect(port.sent.some((message: any) => message.error === 'bridge.expired')).toBe(false);
   });
 
   it('rejects requests before handshake or with the wrong secret', async () => {

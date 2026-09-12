@@ -26,6 +26,8 @@ const isState = (value: unknown): value is BridgeJobStoreState => {
 };
 
 export class BridgeJobRepository {
+  private mutationTail: Promise<void> = Promise.resolve();
+
   constructor(private readonly storage: BridgeStorageArea) {}
 
   private async load(): Promise<BridgeJobStoreState> {
@@ -37,6 +39,12 @@ export class BridgeJobRepository {
 
   private async save(state: BridgeJobStoreState): Promise<void> {
     await this.storage.set({ [BRIDGE_JOB_STORAGE_KEY]: structuredClone(state) });
+  }
+
+  private exclusive<T>(operation: () => Promise<T>): Promise<T> {
+    const run = this.mutationTail.then(operation, operation);
+    this.mutationTail = run.then(() => undefined, () => undefined);
+    return run;
   }
 
   async get(jobId: string): Promise<BridgeJobRecord | undefined> {
@@ -54,31 +62,51 @@ export class BridgeJobRepository {
   }
 
   async accept(record: BridgeJobRecord): Promise<{ record: BridgeJobRecord; created: boolean }> {
-    const state = await this.load();
-    const existing = state.jobs[record.jobId];
-    if (existing) return { record: structuredClone(existing), created: false };
+    return this.exclusive(async () => {
+      const state = await this.load();
+      const existing = state.jobs[record.jobId];
+      if (existing) return { record: structuredClone(existing), created: false };
 
-    state.jobs[record.jobId] = structuredClone(record);
-    state.order.push(record.jobId);
-    while (state.order.length > MAX_BRIDGE_JOB_HISTORY) {
-      const removed = state.order.shift();
-      if (removed) delete state.jobs[removed];
-    }
-    await this.save(state);
-    return { record: structuredClone(record), created: true };
+      state.jobs[record.jobId] = structuredClone(record);
+      state.order.push(record.jobId);
+      while (state.order.length > MAX_BRIDGE_JOB_HISTORY) {
+        const removed = state.order.shift();
+        if (removed) delete state.jobs[removed];
+      }
+      await this.save(state);
+      return { record: structuredClone(record), created: true };
+    });
+  }
+
+  async bindOwner(jobId: string, ownerTabId: number): Promise<BridgeJobRecord> {
+    return this.exclusive(async () => {
+      const state = await this.load();
+      const existing = state.jobs[jobId];
+      if (!existing) throw new Error('bridge-job-not-found');
+      if (existing.ownerTabId !== undefined && existing.ownerTabId !== ownerTabId) {
+        throw new Error('bridge-target-owner-mismatch');
+      }
+      if (existing.ownerTabId === ownerTabId) return structuredClone(existing);
+      const updated: BridgeJobRecord = { ...existing, ownerTabId };
+      state.jobs[jobId] = updated;
+      await this.save(state);
+      return structuredClone(updated);
+    });
   }
 
   async update(
     jobId: string,
     patch: Partial<Pick<BridgeJobRecord, 'status' | 'workflowRunId' | 'error' | 'updatedAt'>>,
   ): Promise<BridgeJobRecord> {
-    const state = await this.load();
-    const existing = state.jobs[jobId];
-    if (!existing) throw new Error('bridge-job-not-found');
-    const updated: BridgeJobRecord = { ...existing, ...patch };
-    state.jobs[jobId] = updated;
-    await this.save(state);
-    return structuredClone(updated);
+    return this.exclusive(async () => {
+      const state = await this.load();
+      const existing = state.jobs[jobId];
+      if (!existing) throw new Error('bridge-job-not-found');
+      const updated: BridgeJobRecord = { ...existing, ...patch };
+      state.jobs[jobId] = updated;
+      await this.save(state);
+      return structuredClone(updated);
+    });
   }
 }
 

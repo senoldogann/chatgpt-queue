@@ -44,6 +44,8 @@ export interface BridgeJobRecord {
   kind: 'run';
   targetId: string;
   conversationKey: string;
+  /** Added after v0.3 prototype storage existed; legacy persisted records may not have it yet. */
+  ownerTabId?: number;
   status: BridgeJobStatus;
   workflowRunId?: string;
   error?: string;
@@ -65,6 +67,10 @@ export type BridgeJobResult =
 export type BridgeValidationResult =
   | { ok: true; value: BridgeJobRequest }
   | { ok: false; error: string };
+
+export interface BridgeValidationOptions {
+  allowExpired?: boolean;
+}
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -89,7 +95,12 @@ const serializedByteLength = (value: unknown): number => {
 const validInputs = (value: unknown): value is Record<string, string> =>
   isRecord(value) && Object.values(value).every((entry) => typeof entry === 'string');
 
-export function validateBridgeRequest(raw: unknown, now: number, expectedSecret: string): BridgeValidationResult {
+export function validateBridgeRequest(
+  raw: unknown,
+  now: number,
+  expectedSecret: string,
+  options: BridgeValidationOptions = {},
+): BridgeValidationResult {
   if (serializedByteLength(raw) > MAX_BRIDGE_REQUEST_BYTES) {
     return { ok: false, error: 'bridge.request-too-large' };
   }
@@ -97,7 +108,13 @@ export function validateBridgeRequest(raw: unknown, now: number, expectedSecret:
   if (raw.version !== BRIDGE_PROTOCOL_VERSION) return { ok: false, error: 'bridge.invalid-version' };
   if (typeof raw.jobId !== 'string' || !JOB_ID.test(raw.jobId)) return { ok: false, error: 'bridge.invalid-job-id' };
   if (typeof raw.secret !== 'string' || !constantTimeEqual(raw.secret, expectedSecret)) return { ok: false, error: 'bridge.invalid-secret' };
-  if (typeof raw.createdAt !== 'number' || typeof raw.expiresAt !== 'number' || raw.expiresAt <= now || raw.createdAt > raw.expiresAt) {
+
+  const createdAt = raw.createdAt;
+  const expiresAt = raw.expiresAt;
+  const validTimeShape = typeof createdAt === 'number'
+    && typeof expiresAt === 'number'
+    && createdAt <= expiresAt;
+  if (!validTimeShape || (!options.allowExpired && (expiresAt as number) <= now)) {
     return { ok: false, error: 'bridge.expired' };
   }
 
@@ -120,8 +137,8 @@ export function validateBridgeRequest(raw: unknown, now: number, expectedSecret:
       jobId: raw.jobId,
       secret: raw.secret,
       kind: 'run',
-      createdAt: raw.createdAt,
-      expiresAt: raw.expiresAt,
+      createdAt: createdAt as number,
+      expiresAt: expiresAt as number,
       payload: {
         workflow: workflow.value,
         inputs: { ...raw.payload.inputs },
