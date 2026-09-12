@@ -78,6 +78,7 @@ const ensureCurrent = async (): Promise<ConversationQueue> =>
   client.request({ type: 'ensure', key: currentKey });
 
 const registerBridgeTarget = async (): Promise<void> => {
+  const previousState = bridgeState;
   const queue = (await client.get(currentKey)) ?? await ensureCurrent();
   const hasActiveItem = queue.items.some((item) => ['queued', 'sending', 'running'].includes(item.state));
   const busy = hasActiveItem
@@ -94,6 +95,7 @@ const registerBridgeTarget = async (): Promise<void> => {
   bridgeTargetId = response.target.targetId;
   bridgeState = response.state;
   if (__FLOWRUN_E2E__) host.dataset.flowrunBridgeTarget = bridgeTargetId;
+  if (previousState !== bridgeState) await render();
 };
 
 const claimCurrent = async (): Promise<boolean> => {

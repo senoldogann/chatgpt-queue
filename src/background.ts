@@ -46,7 +46,7 @@ const handleBridgeRequest = async (request: BridgeControlRequest, tabId: number)
         ...(request.workflowStatus === undefined ? {} : { workflowStatus: request.workflowStatus }),
         busy: request.busy,
       });
-      void nativeBridge.ensureConnected();
+      await nativeBridge.ensureConnected();
       return { target, state: nativeBridge.state() };
     }
     case 'bridgeState':

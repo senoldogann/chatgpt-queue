@@ -1,9 +1,10 @@
-import { mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { BridgeJobRequest } from './protocol';
 
 const JOB_ID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
+export const MAX_COMPLETED_MAILBOX_JOBS = 200;
 
 const assertJobId = (jobId: string): void => {
   if (!JOB_ID.test(jobId)) throw new Error('bridge.invalid-job-id');
@@ -16,7 +17,7 @@ export class BridgeMailbox {
   readonly eventsDir: string;
   readonly resultsDir: string;
 
-  constructor(readonly root: string) {
+  constructor(readonly root: string, private readonly maxCompletedJobs = MAX_COMPLETED_MAILBOX_JOBS) {
     this.inboxDir = join(root, 'inbox');
     this.eventsDir = join(root, 'events');
     this.resultsDir = join(root, 'results');
@@ -88,6 +89,8 @@ export class BridgeMailbox {
     assertJobId(jobId);
     await this.ensure();
     await this.atomicWriteJson(join(this.resultsDir, `${jobId}.json`), value);
+    await rm(join(this.inboxDir, `${jobId}.json`), { force: true });
+    await this.cleanupCompletedJobs();
   }
 
   async readResult(jobId: string): Promise<unknown | undefined> {
@@ -97,6 +100,30 @@ export class BridgeMailbox {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
       throw error;
+    }
+  }
+
+  private async cleanupCompletedJobs(): Promise<void> {
+    if (this.maxCompletedJobs < 1) return;
+    const resultNames = (await readdir(this.resultsDir)).filter((name) => /^[a-f0-9-]{36}\.json$/i.test(name));
+    if (resultNames.length <= this.maxCompletedJobs) return;
+
+    const dated = await Promise.all(resultNames.map(async (name) => ({
+      name,
+      mtimeMs: (await stat(join(this.resultsDir, name))).mtimeMs,
+    })));
+    dated.sort((left, right) => left.mtimeMs - right.mtimeMs || left.name.localeCompare(right.name));
+    const remove = dated.slice(0, Math.max(0, dated.length - this.maxCompletedJobs));
+    const eventNames = await readdir(this.eventsDir);
+
+    for (const entry of remove) {
+      const jobId = entry.name.slice(0, -5);
+      await rm(join(this.resultsDir, entry.name), { force: true });
+      for (const eventName of eventNames) {
+        if (eventName.startsWith(`${jobId}.`) && eventName.endsWith('.json')) {
+          await rm(join(this.eventsDir, eventName), { force: true });
+        }
+      }
     }
   }
 }

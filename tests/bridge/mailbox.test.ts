@@ -14,6 +14,8 @@ const request = {
   payload: {},
 };
 
+const jobId = (index: number): string => `123e4567-e89b-42d3-a456-${index.toString(16).padStart(12, '0')}`;
+
 describe('BridgeMailbox', () => {
   it('submits requests atomically and reads them back', async () => {
     const root = await mkdtemp(join(tmpdir(), 'flowrun-mailbox-'));
@@ -33,6 +35,23 @@ describe('BridgeMailbox', () => {
 
     expect(await box.readEvents(request.jobId)).toEqual([{ status: 'accepted' }, { status: 'running' }]);
     expect(await box.readResult(request.jobId)).toEqual({ status: 'completed' });
+  });
+
+  it('removes accepted inbox requests and bounds completed result/event history', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'flowrun-mailbox-'));
+    const box = new BridgeMailbox(root, 2);
+
+    for (let index = 1; index <= 3; index += 1) {
+      const id = jobId(index);
+      await box.submit({ ...request, jobId: id });
+      await box.writeEvent(id, 1, { status: 'accepted' });
+      await box.writeResult(id, { status: 'completed' });
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    }
+
+    expect((await readdir(join(root, 'inbox'))).filter((name) => name.endsWith('.json'))).toEqual([]);
+    expect((await readdir(join(root, 'results'))).filter((name) => name.endsWith('.json'))).toHaveLength(2);
+    expect((await readdir(join(root, 'events'))).filter((name) => name.endsWith('.json'))).toHaveLength(2);
   });
 
   it('rejects unsafe job ids before touching paths', async () => {
