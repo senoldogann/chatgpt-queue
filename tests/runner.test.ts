@@ -36,6 +36,7 @@ class FakeAdapter implements ChatGPTAdapter {
   sent: string[] = [];
   constructor(public snapshot: PageSnapshot, private result: SendResult = { attempted: true }) {}
   getState(domStable: boolean) { return { ...this.snapshot, domStable }; }
+  getLatestCompletedAssistantArtifact() { return null; }
   async sendMessage(content: string) { this.sent.push(content); return this.result; }
 }
 

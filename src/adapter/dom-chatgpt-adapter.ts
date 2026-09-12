@@ -1,4 +1,4 @@
-import type { ChatGPTAdapter, SendResult } from './chatgpt-adapter';
+import type { AssistantArtifact, ChatGPTAdapter, SendResult } from './chatgpt-adapter';
 import type { PageSnapshot } from '../domain/types';
 
 const SEND_SELECTORS = [
@@ -118,6 +118,7 @@ const detectBlockingReason = (document: Document): string | null => {
   const candidates = [...document.querySelectorAll<HTMLElement>('[role="alert"], [data-testid*="error" i], [data-testid="conversation-turn-error"]')];
   const text = candidates.map(normalizedText).join(' ');
   if (!text) return null;
+  if (/message delivery timed out|ileti.*zaman aşım|mesaj.*zaman aşım/.test(text)) return 'message-delivery-timeout';
   if (/too many requests|rate limit|rate-limit|çok fazla istek/.test(text)) return 'rate-limit';
   if (/network error|connection error|ağ hatası|bağlantı hatası/.test(text)) return 'network-error';
   if (/session expired|sign in|log in|oturum.*sona er/.test(text)) return 'session-expired';
@@ -133,13 +134,29 @@ const hasConfirmation = (document: Document): boolean => {
   });
 };
 
+const assistantTurnRoot = (message: HTMLElement): HTMLElement =>
+  message.closest<HTMLElement>('[data-testid^="conversation-turn-"], [data-turn-id], [data-turn="assistant"]') ?? message;
+
 const assistantState = (document: Document): { count: number; completionControlPresent: boolean } => {
   const messages = [...document.querySelectorAll<HTMLElement>(ASSISTANT_SELECTOR)];
   const latestMessage = messages.at(-1);
   if (!latestMessage) return { count: 0, completionControlPresent: false };
-  const latestTurn = latestMessage.closest<HTMLElement>('[data-testid^="conversation-turn-"]') ?? latestMessage;
+  const latestTurn = assistantTurnRoot(latestMessage);
   const completionControl = firstWithin<HTMLButtonElement>(latestTurn, ASSISTANT_COMPLETION_SELECTORS);
   return { count: messages.length, completionControlPresent: Boolean(completionControl && !isDisabled(completionControl)) };
+};
+
+const assistantTurnKey = (turn: HTMLElement, message: HTMLElement, index: number): string =>
+  turn.getAttribute('data-turn-id')
+  ?? message.getAttribute('data-message-id')
+  ?? turn.getAttribute('data-testid')
+  ?? turn.id
+  ?? `assistant:${index}`;
+
+const assistantText = (message: HTMLElement): string => {
+  const clone = message.cloneNode(true) as HTMLElement;
+  clone.querySelectorAll('button, script, style, [aria-hidden="true"], [data-testid*="copy" i]').forEach((element) => element.remove());
+  return (clone.textContent ?? '').replace(/\s+/g, ' ').trim();
 };
 
 export class DOMChatGPTAdapter implements ChatGPTAdapter {
@@ -162,6 +179,21 @@ export class DOMChatGPTAdapter implements ChatGPTAdapter {
       domStable,
       confirmationVisible: hasConfirmation(this.document),
       blockingReason,
+    };
+  }
+
+  getLatestCompletedAssistantArtifact(): AssistantArtifact | null {
+    const messages = [...this.document.querySelectorAll<HTMLElement>(ASSISTANT_SELECTOR)];
+    const latestMessage = messages.at(-1);
+    if (!latestMessage) return null;
+    const latestTurn = assistantTurnRoot(latestMessage);
+    const completionControl = firstWithin<HTMLButtonElement>(latestTurn, ASSISTANT_COMPLETION_SELECTORS);
+    if (!completionControl || isDisabled(completionControl)) return null;
+    const text = assistantText(latestMessage);
+    if (!text) return null;
+    return {
+      turnKey: assistantTurnKey(latestTurn, latestMessage, messages.length),
+      text,
     };
   }
 
