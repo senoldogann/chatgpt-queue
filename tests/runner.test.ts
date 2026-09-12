@@ -42,9 +42,10 @@ class FakeAdapter implements ChatGPTAdapter {
 
 class FakeBackend implements RunnerBackend {
   calls: string[] = [];
+  reserveArgs?: [string, number, string | undefined];
   constructor(public current: ConversationQueue) {}
   async get() { return this.current; }
-  async reserve() { this.calls.push('reserve'); return { itemId: 'i', content: 'hello', dispatchToken: 'd' }; }
+  async reserve(key: string, count: number, turnKey?: string) { this.calls.push('reserve'); this.reserveArgs = [key, count, turnKey]; return { itemId: 'i', content: 'hello', dispatchToken: 'd' }; }
   async generationStarted() { this.calls.push('generationStarted'); }
   async waitingStable() { this.calls.push('waitingStable'); }
   async complete() { this.calls.push('complete'); }
@@ -58,6 +59,13 @@ describe('QueueRunner', () => {
     await new QueueRunner(adapter, backend).evaluate('conv:a', false);
     expect(backend.calls).toEqual(['reserve']);
     expect(adapter.sent).toEqual(['hello']);
+  });
+
+  it('persists the latest assistant turn identity when reserving a send', async () => {
+    const backend = new FakeBackend(queue('ready_to_send'));
+    const adapter = new FakeAdapter({ ...baseSnapshot, latestAssistantTurnKey: 'turn-before-send' });
+    await new QueueRunner(adapter, backend).evaluate('conv:a', false);
+    expect(backend.reserveArgs).toEqual(['conv:a', 1, 'turn-before-send']);
   });
 
   it('confirms generation only after page evidence appears', async () => {

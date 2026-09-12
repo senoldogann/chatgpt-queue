@@ -5,7 +5,7 @@ import { evaluateRuntime } from '../domain/state-machine';
 
 export interface RunnerBackend {
   get(key: string): Promise<ConversationQueue | undefined>;
-  reserve(key: string, baselineAssistantCount: number): Promise<DispatchReservation | null>;
+  reserve(key: string, baselineAssistantCount: number, baselineAssistantTurnKey?: string): Promise<DispatchReservation | null>;
   generationStarted(key: string, itemId: string, dispatchToken: string, controlObserved: boolean): Promise<unknown>;
   waitingStable(key: string, itemId: string, dispatchToken: string): Promise<unknown>;
   complete(key: string, itemId: string, dispatchToken: string): Promise<unknown>;
@@ -32,6 +32,9 @@ export class QueueRunner {
       phase: queue.runtime.phase,
       snapshot,
       baselineAssistantCount,
+      ...(queue.runtime.baselineAssistantTurnKey === undefined
+        ? {}
+        : { baselineAssistantTurnKey: queue.runtime.baselineAssistantTurnKey }),
       generationObserved: queue.runtime.generationObserved ?? false,
     });
 
@@ -41,7 +44,7 @@ export class QueueRunner {
     }
 
     if (decision.action === 'send') {
-      const reservation = await this.backend.reserve(key, snapshot.assistantMessageCount);
+      const reservation = await this.backend.reserve(key, snapshot.assistantMessageCount, snapshot.latestAssistantTurnKey);
       if (!reservation) return;
       const result = await this.adapter.sendMessage(reservation.content);
       if (!result.attempted) await this.backend.block(key, 'send-not-attempted');

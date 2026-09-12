@@ -46,6 +46,7 @@ const pageHtml = `<!doctype html>
       const responseTexts = params.getAll('response');
       const deliveryTimeoutMode = params.get('delivery-timeout') === '1';
       const seedCompleted = params.get('seed-completed') === '1';
+      const virtualizeAssistant = params.get('virtualize-assistant') === '1';
       const storageKey = 'fixture-sends:' + conversationId;
       const composer = document.getElementById('prompt-textarea');
       let send = document.querySelector('[data-testid="send-button"]');
@@ -83,6 +84,9 @@ const pageHtml = `<!doctype html>
         if (authenticatedMode) removeSendControl();
         else if (send) send.disabled = true;
 
+        if (virtualizeAssistant) {
+          messages.querySelector('[data-message-author-role="assistant"]')?.remove();
+        }
         const response = document.createElement('article');
         response.dataset.messageAuthorRole = 'assistant';
         response.textContent = 'assistant streaming';

@@ -473,6 +473,27 @@ test('continues when the stop control is missed but the completed assistant turn
   await expect.poll(async () => (await storedQueue(extensionWorker, 'conv:missed-stop'))?.status).toBe('completed');
 });
 
+test('advances when long-chat virtualization replaces the latest assistant turn without increasing DOM count', async ({ extensionContext, extensionWorker }) => {
+  const page = await openFixture(extensionContext, '/c/virtualized-long?seed-completed=1&virtualize-assistant=1');
+  await addMessage(page, 'virtualized-first');
+  await addMessage(page, 'virtualized-second');
+  await startQueue(page);
+
+  await expect.poll(async () => (await sentEvents(page, 'virtualized-long')).length).toBe(1);
+  const duringFirst = await storedQueue(extensionWorker, 'conv:virtualized-long');
+  expect(duringFirst.runtime.baselineAssistantCount).toBe(1);
+  expect(duringFirst.runtime.baselineAssistantTurnKey).toBeTruthy();
+  expect(await page.locator('[data-message-author-role="assistant"]').count()).toBe(1);
+
+  await page.locator('#fixture-complete').click();
+  expect(await page.locator('[data-message-author-role="assistant"]').count()).toBe(1);
+  await expect.poll(async () => (await sentEvents(page, 'virtualized-long')).length).toBe(2);
+  expect((await sentEvents(page, 'virtualized-long')).map((event) => event.content)).toEqual(['virtualized-first', 'virtualized-second']);
+
+  await page.locator('#fixture-complete').click();
+  await expect.poll(async () => (await storedQueue(extensionWorker, 'conv:virtualized-long'))?.status).toBe('completed');
+});
+
 test('does not reserve the next item while generation control is delayed', async ({ extensionContext, extensionWorker }) => {
   const page = await openFixture(extensionContext, '/c/delayed-generation?authenticated=1&delayed-stop-ms=1400');
   await addMessage(page, 'delayed-first');
