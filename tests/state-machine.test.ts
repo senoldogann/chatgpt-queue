@@ -134,4 +134,27 @@ describe('runtime state machine', () => {
     })).toEqual({ action: 'complete' });
   });
 
+  it('allows only an explicitly eligible legacy runtime to enter completion stability without turn identity', () => {
+    const legacySnapshot = safe({
+      assistantMessageCount: 3,
+      latestAssistantTurnKey: 'assistant:3:final',
+      assistantCompletionControlPresent: false,
+    });
+    expect(evaluateRuntime({
+      phase: 'generating',
+      snapshot: legacySnapshot,
+      baselineAssistantCount: 3,
+      generationObserved: true,
+      legacyCompletionRecoveryEligible: true,
+    })).toEqual({ action: 'wait_for_stability' });
+
+    expect(evaluateRuntime({
+      phase: 'generating',
+      snapshot: legacySnapshot,
+      baselineAssistantCount: 3,
+      generationObserved: true,
+      legacyCompletionRecoveryEligible: false,
+    })).toEqual({ action: 'wait' });
+  });
+
 });

@@ -6,6 +6,7 @@ export interface RuntimeEvaluationInput {
   baselineAssistantCount: number;
   baselineAssistantTurnKey?: string;
   generationObserved: boolean;
+  legacyCompletionRecoveryEligible?: boolean;
 }
 
 const blockReason = (snapshot: PageSnapshot): string | null => {
@@ -15,7 +16,14 @@ const blockReason = (snapshot: PageSnapshot): string | null => {
 };
 
 export function evaluateRuntime(input: RuntimeEvaluationInput): RuntimeDecision {
-  const { phase, snapshot, baselineAssistantCount, baselineAssistantTurnKey, generationObserved } = input;
+  const {
+    phase,
+    snapshot,
+    baselineAssistantCount,
+    baselineAssistantTurnKey,
+    generationObserved,
+    legacyCompletionRecoveryEligible = false,
+  } = input;
   const blocked = blockReason(snapshot);
   if (blocked) return { action: 'block', reason: blocked };
 
@@ -29,8 +37,8 @@ export function evaluateRuntime(input: RuntimeEvaluationInput): RuntimeDecision 
   const completionEvidence = generationObserved || snapshot.assistantCompletionControlPresent;
   const legacyCompletionTarget = !baselineAssistantTurnKey
     && generationObserved
-    && snapshot.assistantCompletionControlPresent
-    && pageReady;
+    && pageReady
+    && (snapshot.assistantCompletionControlPresent || legacyCompletionRecoveryEligible);
   const hasCompletionTarget = hasNewAssistant || legacyCompletionTarget;
 
   switch (phase) {

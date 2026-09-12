@@ -3,6 +3,8 @@ import type { DispatchReservation } from '../coordinator/queue-coordinator';
 import type { ConversationQueue } from '../domain/types';
 import { evaluateRuntime } from '../domain/state-machine';
 
+export const LEGACY_COMPLETION_RECOVERY_MS = 30_000;
+
 export interface RunnerBackend {
   get(key: string): Promise<ConversationQueue | undefined>;
   reserve(key: string, baselineAssistantCount: number, baselineAssistantTurnKey?: string): Promise<DispatchReservation | null>;
@@ -12,11 +14,20 @@ export interface RunnerBackend {
   block(key: string, reason: string): Promise<unknown>;
 }
 
+export interface QueueRunnerOptions {
+  now?: () => number;
+}
+
 export class QueueRunner {
+  private readonly now: () => number;
+
   constructor(
     private readonly adapter: ChatGPTAdapter,
     private readonly backend: RunnerBackend,
-  ) {}
+    options: QueueRunnerOptions = {},
+  ) {
+    this.now = options.now ?? (() => Date.now());
+  }
 
   async evaluate(key: string, domStable: boolean): Promise<void> {
     const queue = await this.backend.get(key);
@@ -28,6 +39,18 @@ export class QueueRunner {
 
     const snapshot = this.adapter.getState(domStable);
     const baselineAssistantCount = queue.runtime.baselineAssistantCount ?? snapshot.assistantMessageCount;
+    const active = queue.runtime.activeItemId
+      ? queue.items.find((item) => item.id === queue.runtime.activeItemId)
+      : undefined;
+    const generationObserved = queue.runtime.generationObserved ?? false;
+    const legacyCompletionRecoveryEligible = queue.runtime.baselineAssistantTurnKey === undefined
+      && generationObserved
+      && active?.startedAt !== undefined
+      && this.now() - active.startedAt >= LEGACY_COMPLETION_RECOVERY_MS
+      && !snapshot.isGenerating
+      && snapshot.composerReady
+      && Boolean(snapshot.latestAssistantTurnKey);
+
     const decision = evaluateRuntime({
       phase: queue.runtime.phase,
       snapshot,
@@ -35,7 +58,8 @@ export class QueueRunner {
       ...(queue.runtime.baselineAssistantTurnKey === undefined
         ? {}
         : { baselineAssistantTurnKey: queue.runtime.baselineAssistantTurnKey }),
-      generationObserved: queue.runtime.generationObserved ?? false,
+      generationObserved,
+      ...(legacyCompletionRecoveryEligible ? { legacyCompletionRecoveryEligible: true } : {}),
     });
 
     if (decision.action === 'block') {
@@ -53,9 +77,6 @@ export class QueueRunner {
 
     if (decision.action === 'wait') return;
 
-    const active = queue.runtime.activeItemId
-      ? queue.items.find((item) => item.id === queue.runtime.activeItemId)
-      : undefined;
     if (!active?.dispatchToken) {
       await this.backend.block(key, 'active-item-missing');
       return;
