@@ -44,6 +44,9 @@ export interface WorkflowRun {
   inputs: Record<string, string>;
   steps: StepRun[];
   events: RunEvent[];
+  browser?: {
+    conversationKey: string;
+  };
   createdAt: number;
   updatedAt: number;
 }
