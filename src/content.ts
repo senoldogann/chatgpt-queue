@@ -41,7 +41,7 @@ let selectedWorkflow: WorkflowDefinition | undefined;
 let workflowRun: WorkflowRun | undefined;
 let workflowError: string | undefined;
 let bridgeTargetId: string | undefined;
-let bridgeState: 'disabled' | 'disconnected' | 'connected' = 'disconnected';
+let bridgeState: 'disabled' | 'enabling' | 'disconnected' | 'connected' = 'disconnected';
 let recoveringDomBlock = false;
 
 const shouldObserveLifecycle = (queue: ConversationQueue | undefined): boolean => {
@@ -68,6 +68,7 @@ const render = async (): Promise<ConversationQueue | undefined> => {
       ...(selectedWorkflow === undefined ? {} : { workflow: selectedWorkflow }),
       ...(workflowRun === undefined ? {} : { run: workflowRun }),
       ...(workflowError === undefined ? {} : { error: workflowError }),
+      bridgeState,
     });
   }
   return queue;
@@ -317,6 +318,17 @@ panel = new QueuePanel(host, {
   loadWorkflow: loadWorkflowText,
   runWorkflow: runSelectedWorkflow,
   clearWorkflow: clearSelectedWorkflow,
+  enableBridge: async () => {
+    bridgeState = 'enabling';
+    await render();
+    try {
+      const response = await client.request<{ enabled: boolean; state: 'disabled' | 'disconnected' | 'connected' }>({ type: 'bridgeEnable' });
+      bridgeState = response.state;
+    } catch {
+      bridgeState = 'disconnected';
+    }
+    await render();
+  },
 });
 
 const armStableEvaluation = (): void => {

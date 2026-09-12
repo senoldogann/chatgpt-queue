@@ -282,4 +282,55 @@ describe('QueuePanel', () => {
     panel.render({ ...sampleQueue(), status: 'blocked', blockedReason: 'confirmation-required' });
     expect(host.shadowRoot!.textContent).toContain('confirmation-required');
   });
+  it('shows a CSS-only activity spinner only while queue or FlowRun is running', () => {
+    const host = document.createElement('div');
+    document.body.append(host);
+    const panel = new QueuePanel(host, {});
+
+    panel.render(sampleQueue(), undefined, { bridgeState: 'disabled' });
+    let root = host.shadowRoot!;
+    expect(root.querySelector('[data-role="activity-spinner"]')).not.toBeNull();
+    expect(root.querySelector('[data-role="activity-spinner-collapsed"]')).not.toBeNull();
+    expect(root.querySelector('style')?.textContent).toContain('@keyframes queue-spin');
+    expect(root.querySelector('style')?.textContent).toContain('prefers-reduced-motion');
+
+    const idle: ConversationQueue = { ...sampleQueue(), status: 'completed', items: [], runtime: { phase: 'idle' } };
+    panel.render(idle, undefined, { bridgeState: 'disabled' });
+    root = host.shadowRoot!;
+    expect(root.querySelector('[data-role="activity-spinner"]')).toBeNull();
+
+    const runningRun: WorkflowRun = {
+      id: 'run-spinner', workflowName: 'flow', workflowVersion: 1, status: 'running', inputs: {},
+      steps: [{ id: 'step', status: 'waiting' }], events: [], createdAt: 1, updatedAt: 2,
+    };
+    panel.render(idle, undefined, { run: runningRun, bridgeState: 'disabled' });
+    expect(host.shadowRoot!.querySelector('[data-role="activity-spinner"]')).not.toBeNull();
+
+    panel.render(idle, undefined, { run: { ...runningRun, status: 'blocked', steps: [{ id: 'step', status: 'blocked', error: 'x' }] }, bridgeState: 'disabled' });
+    expect(host.shadowRoot!.querySelector('[data-role="activity-spinner"]')).toBeNull();
+  });
+
+  it('renders CLI bridge state and requests enable only from an explicit click', async () => {
+    const enableBridge = vi.fn();
+    const host = document.createElement('div');
+    document.body.append(host);
+    const panel = new QueuePanel(host, { enableBridge });
+    const idle: ConversationQueue = { ...sampleQueue(), status: 'completed', items: [], runtime: { phase: 'idle' } };
+
+    panel.render(idle, undefined, { bridgeState: 'disabled' });
+    expect(host.shadowRoot!.textContent).toContain('CLI bridge');
+    expect(host.shadowRoot!.textContent).toContain('Disabled');
+    host.shadowRoot!.querySelector<HTMLButtonElement>('[data-action="enable-bridge"]')!.click();
+    await Promise.resolve();
+    expect(enableBridge).toHaveBeenCalledTimes(1);
+
+    panel.render(idle, undefined, { bridgeState: 'connected' });
+    expect(host.shadowRoot!.textContent).toContain('Connected');
+    expect(host.shadowRoot!.querySelector('[data-action="enable-bridge"]')).toBeNull();
+
+    panel.render(idle, undefined, { bridgeState: 'disconnected' });
+    expect(host.shadowRoot!.textContent).toContain('Disconnected');
+    expect(host.shadowRoot!.querySelector<HTMLButtonElement>('[data-action="enable-bridge"]')?.textContent).toContain('Reconnect');
+  });
+
 });
