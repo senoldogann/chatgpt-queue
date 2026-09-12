@@ -130,6 +130,62 @@ describe('DOMChatGPTAdapter', () => {
     expect(adapter.getState(true).assistantCompletionControlPresent).toBe(true);
   });
 
+  it('returns the latest completed assistant artifact with a stable turn key and clean text', () => {
+    const adapter = render(`
+      <main>
+        <div id="prompt-textarea" contenteditable="true"></div>
+        <article data-testid="conversation-turn-2" data-turn="assistant" data-turn-id="turn-2">
+          <div data-message-author-role="assistant" data-message-id="message-2">Architecture result<button>Nested action</button></div>
+          <button data-testid="copy-turn-action-button">Copy response</button>
+        </article>
+      </main>`);
+
+    expect(adapter.getLatestCompletedAssistantArtifact()).toEqual({
+      turnKey: 'turn-2',
+      text: 'Architecture result',
+    });
+  });
+
+  it('uses a non-empty positional turn key when ChatGPT exposes no turn identifiers', () => {
+    const adapter = render(`
+      <main>
+        <div id="prompt-textarea" contenteditable="true"></div>
+        <article data-message-author-role="assistant">first<button data-testid="copy-turn-action-button">Copy</button></article>
+      </main>`);
+
+    expect(adapter.getLatestCompletedAssistantArtifact()?.turnKey).toBe('assistant:1');
+
+    document.querySelector('main')!.insertAdjacentHTML('beforeend', `
+      <article data-message-author-role="assistant">second<button data-testid="copy-turn-action-button">Copy</button></article>`);
+    expect(adapter.getLatestCompletedAssistantArtifact()?.turnKey).toBe('assistant:2');
+  });
+
+  it('does not reuse an older completed assistant turn while the latest turn is incomplete', () => {
+    const adapter = render(`
+      <main>
+        <div id="prompt-textarea" contenteditable="true"></div>
+        <article data-testid="conversation-turn-2" data-turn="assistant" data-turn-id="turn-old">
+          <div data-message-author-role="assistant">old answer</div>
+          <button data-testid="copy-turn-action-button">Copy response</button>
+        </article>
+        <article data-testid="conversation-turn-4" data-turn="assistant" data-turn-id="turn-new">
+          <div data-message-author-role="assistant">streaming answer</div>
+        </article>
+      </main>`);
+
+    expect(adapter.getLatestCompletedAssistantArtifact()).toBeNull();
+  });
+
+  it('classifies ChatGPT message delivery timeout explicitly', () => {
+    const adapter = render(`
+      <main>
+        <div id="prompt-textarea" contenteditable="true"></div>
+        <div role="alert">Message delivery timed out. Please try again.</div>
+      </main>`);
+
+    expect(adapter.getState(true).blockingReason).toBe('message-delivery-timeout');
+  });
+
   it('writes the composer and clicks send exactly once', async () => {
     const adapter = render(`
       <main>

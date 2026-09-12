@@ -37,17 +37,34 @@ const pageHtml = `<!doctype html>
       const tabName = params.get('tab') ?? 'default';
       const authenticatedMode = params.get('authenticated') === '1';
       const transientGapMode = params.get('transient-gap') === '1';
+      const transientGapMs = Number(params.get('transient-gap-ms') ?? (transientGapMode ? '100' : '0'));
       const routeOnSend = params.get('route-on-send');
       const routeChainFinal = params.get('route-chain-final');
       const delayedStopMs = Number(params.get('delayed-stop-ms') ?? '0');
       const omitStop = params.get('omit-stop') === '1';
       const autoCompleteMs = Number(params.get('auto-complete-ms') ?? '0');
+      const responseTexts = params.getAll('response');
+      const deliveryTimeoutMode = params.get('delivery-timeout') === '1';
+      const seedCompleted = params.get('seed-completed') === '1';
       const storageKey = 'fixture-sends:' + conversationId;
       const composer = document.getElementById('prompt-textarea');
       let send = document.querySelector('[data-testid="send-button"]');
       const messages = document.getElementById('messages');
       let nextSendUncertain = false;
       let responseCount = 0;
+
+      if (seedCompleted) {
+        responseCount = 1;
+        const response = document.createElement('article');
+        response.dataset.messageAuthorRole = 'assistant';
+        response.textContent = 'already completed response';
+        const copy = document.createElement('button');
+        copy.type = 'button';
+        copy.dataset.testid = 'copy-turn-action-button';
+        copy.textContent = 'Copy';
+        response.append(copy);
+        messages.append(response);
+      }
 
       const readEvents = () => JSON.parse(localStorage.getItem(storageKey) ?? '[]');
       const recordSend = (content) => {
@@ -88,15 +105,16 @@ const pageHtml = `<!doctype html>
       const completeGeneration = () => {
         document.querySelector('[data-testid="stop-button"], button[aria-label="Stop generating"]')?.remove();
         responseCount += 1;
+        const responseText = responseTexts[responseCount - 1] ?? ('assistant response ' + responseCount);
         const existingResponse = messages.querySelector('[data-message-author-role="assistant"]:last-child');
         let completedResponse;
         if (existingResponse) {
-          existingResponse.textContent = 'assistant response ' + responseCount;
+          existingResponse.textContent = responseText;
           completedResponse = existingResponse;
         } else {
           const response = document.createElement('article');
           response.dataset.messageAuthorRole = 'assistant';
-          response.textContent = 'assistant response ' + responseCount;
+          response.textContent = responseText;
           messages.append(response);
           completedResponse = response;
         }
@@ -114,9 +132,9 @@ const pageHtml = `<!doctype html>
           if (!composer.isConnected) document.getElementById('chat').append(composer);
         };
 
-        if (transientGapMode) {
+        if (transientGapMs > 0) {
           composer.remove();
-          window.setTimeout(restoreComposer, 100);
+          window.setTimeout(restoreComposer, transientGapMs);
         } else {
           restoreComposer();
         }
@@ -133,6 +151,14 @@ const pageHtml = `<!doctype html>
           return;
         }
         beginGeneration();
+        if (deliveryTimeoutMode) {
+          window.setTimeout(() => {
+            const alert = document.createElement('div');
+            alert.setAttribute('role', 'alert');
+            alert.textContent = 'Message delivery timed out. Please try again.';
+            document.body.append(alert);
+          }, 0);
+        }
         if (autoCompleteMs > 0) window.setTimeout(completeGeneration, autoCompleteMs);
         if (routeOnSend && location.pathname === '/new') {
           history.pushState({}, '', '/c/' + routeOnSend);

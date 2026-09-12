@@ -107,6 +107,47 @@ describe('queue coordinator', () => {
     expect(queue?.runtime.phase).toBe('ready_to_send_next');
   });
 
+  it('completes the active item while paused but keeps the next item queued until resume', async () => {
+    const { coordinator } = setup();
+    await coordinator.ensureQueue('conv:a');
+    await coordinator.add('conv:a', ['one', 'two']);
+    await coordinator.claim('conv:a', 1);
+    await coordinator.start('conv:a', 1);
+    const reservation = await coordinator.reserveNext('conv:a', 1, 1);
+    await coordinator.ackSent('conv:a', 1, reservation!.itemId, reservation!.dispatchToken);
+    await coordinator.markGenerationStarted('conv:a', 1, reservation!.itemId, reservation!.dispatchToken);
+    await coordinator.pause('conv:a', 1);
+
+    const completed = await coordinator.completeCurrent('conv:a', 1, reservation!.itemId, reservation!.dispatchToken);
+    expect(completed.status).toBe('paused');
+    expect(completed.items.map((item) => item.state)).toEqual(['completed', 'queued']);
+    expect(await coordinator.reserveNext('conv:a', 1, 2)).toBeNull();
+
+    await coordinator.start('conv:a', 1);
+    const next = await coordinator.reserveNext('conv:a', 1, 2);
+    expect(next?.content).toBe('two');
+  });
+
+  it('preserves the active lifecycle phase across a recoverable block and resume', async () => {
+    const { coordinator } = setup();
+    await coordinator.ensureQueue('conv:a');
+    await coordinator.add('conv:a', ['one']);
+    await coordinator.claim('conv:a', 1);
+    await coordinator.start('conv:a', 1);
+    const reservation = await coordinator.reserveNext('conv:a', 1, 1);
+    await coordinator.ackSent('conv:a', 1, reservation!.itemId, reservation!.dispatchToken);
+    await coordinator.markGenerationStarted('conv:a', 1, reservation!.itemId, reservation!.dispatchToken);
+
+    const blocked = await coordinator.block('conv:a', 1, 'dom-unrecognized');
+    expect(blocked.status).toBe('blocked');
+    expect(blocked.runtime.phase).toBe('generating');
+
+    const resumed = await coordinator.start('conv:a', 1);
+    expect(resumed.status).toBe('running');
+    expect(resumed.runtime.phase).toBe('generating');
+    expect(resumed.blockedReason).toBeUndefined();
+  });
+
   it('isolates conversation mutations', async () => {
     const { coordinator } = setup();
     await coordinator.ensureQueue('conv:a');

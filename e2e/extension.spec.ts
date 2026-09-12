@@ -148,6 +148,24 @@ test('waits through a transient unrecognized DOM between queued messages', async
   await expect.poll(async () => (await storedQueue(extensionWorker, 'conv:transient-gap'))?.status).toBe('completed');
 });
 
+test('recovers automatically when a long transient ChatGPT DOM gap caused dom-unrecognized', async ({ extensionContext, extensionWorker }) => {
+  const page = await openFixture(extensionContext, '/c/recover-dom-gap?authenticated=1&transient-gap-ms=2500');
+  await addMessage(page, 'gap-first');
+  await addMessage(page, 'gap-second');
+  await startQueue(page);
+
+  await expect.poll(async () => (await sentEvents(page, 'recover-dom-gap')).length).toBe(1);
+  await page.locator('#fixture-complete').click();
+
+  await expect.poll(async () => (await storedQueue(extensionWorker, 'conv:recover-dom-gap'))?.blockedReason).toBe('dom-unrecognized');
+  await expect.poll(async () => (await sentEvents(page, 'recover-dom-gap')).length, { timeout: 8_000 }).toBe(2);
+  const recovered = await storedQueue(extensionWorker, 'conv:recover-dom-gap');
+  expect(recovered.status).toBe('running');
+  expect(recovered.blockedReason).toBeUndefined();
+  expect(recovered.items[0]?.state).toBe('completed');
+  expect(recovered.items[1]?.state).toBe('running');
+});
+
 test('preserves add-input focus and draft after completion while ChatGPT DOM mutates', async ({ extensionContext, extensionWorker }) => {
   const page = await openFixture(extensionContext, '/c/post-completion-focus');
   await addMessage(page, 'initial message');
@@ -249,7 +267,7 @@ test('sends one item at a time and ignores duplicate completion mutations', asyn
   expect(queue.items.map((item: any) => item.state)).toEqual(['completed', 'completed']);
 });
 
-test('pause preserves the active observation phase and resume continues safely', async ({ extensionContext, extensionWorker }) => {
+test('pause lets the active response finish but does not dispatch the next item until resume', async ({ extensionContext, extensionWorker }) => {
   const page = await openFixture(extensionContext, '/c/pause');
   await addMessage(page, 'pause-first');
   await addMessage(page, 'pause-second');
@@ -259,10 +277,12 @@ test('pause preserves the active observation phase and resume continues safely',
 
   await queueRoot(page).locator('button[data-action="pause"]').click();
   await expect(queueRoot(page)).toContainText('Paused');
-  expect((await storedQueue(extensionWorker, 'conv:pause')).runtime.phase).toBe('generating');
 
   await page.locator('#fixture-complete').click();
-  await page.waitForTimeout(1_100);
+  await expect.poll(async () => (await storedQueue(extensionWorker, 'conv:pause'))?.items?.[0]?.state).toBe('completed');
+  const paused = await storedQueue(extensionWorker, 'conv:pause');
+  expect(paused.status).toBe('paused');
+  expect(paused.items.map((item: any) => item.state)).toEqual(['completed', 'queued']);
   expect(await sentEvents(page, 'pause')).toHaveLength(1);
 
   await queueRoot(page).locator('button[data-action="resume"]').click();
@@ -311,6 +331,94 @@ test('refresh recovers an unresolved sending item as uncertain-send without rese
   await expect(queueRoot(page)).toContainText('Blocked: uncertain-send');
   expect(await sentEvents(page, 'refresh')).toHaveLength(1);
   expect((await storedQueue(extensionWorker, 'conv:refresh')).blockedReason).toBe('uncertain-send');
+});
+
+test('recovers a persisted legacy dom-unrecognized block when the ChatGPT DOM is healthy again', async ({ extensionContext, extensionWorker }) => {
+  await extensionWorker.evaluate(async ({ storageKey, queueKey }) => {
+    const now = Date.now();
+    await chrome.storage.local.set({
+      [storageKey]: {
+        version: 1,
+        queues: {
+          [queueKey]: {
+            version: 1,
+            id: 'seed-dom-block',
+            conversationKey: queueKey,
+            status: 'blocked',
+            blockedReason: 'dom-unrecognized',
+            items: [{
+              id: 'seed-item',
+              content: 'Siradaki adimlar ile devam et.',
+              state: 'running',
+              dispatchToken: 'seed-dispatch',
+              createdAt: now - 5_000,
+              updatedAt: now - 4_000,
+              startedAt: now - 4_000,
+            }],
+            runtime: {
+              phase: 'blocked',
+              activeItemId: 'seed-item',
+              baselineAssistantCount: 0,
+              generationObserved: true,
+            },
+            createdAt: now - 5_000,
+            updatedAt: now - 4_000,
+          },
+        },
+      },
+    });
+  }, { storageKey: STORAGE_KEY, queueKey: 'conv:legacy-dom-block' });
+
+  const page = await openFixture(extensionContext, '/c/legacy-dom-block?seed-completed=1');
+  await expect.poll(async () => (await storedQueue(extensionWorker, 'conv:legacy-dom-block'))?.status).toBe('completed');
+  const recovered = await storedQueue(extensionWorker, 'conv:legacy-dom-block');
+  expect(recovered.blockedReason).toBeUndefined();
+  expect(recovered.items[0]?.state).toBe('completed');
+  await expect(queueRoot(page)).toContainText('Completed');
+  await expect(queueRoot(page)).not.toContainText('dom-unrecognized');
+});
+
+test('reconciles a persisted paused running item when the page already shows its completed response', async ({ extensionContext, extensionWorker }) => {
+  await extensionWorker.evaluate(async ({ storageKey, queueKey }) => {
+    const now = Date.now();
+    await chrome.storage.local.set({
+      [storageKey]: {
+        version: 1,
+        queues: {
+          [queueKey]: {
+            version: 1,
+            id: 'seed-paused-running',
+            conversationKey: queueKey,
+            status: 'paused',
+            items: [{
+              id: 'seed-item',
+              content: 'Siradaki adimlar ile devam et.',
+              state: 'running',
+              dispatchToken: 'seed-dispatch',
+              createdAt: now - 5_000,
+              updatedAt: now - 4_000,
+              startedAt: now - 4_000,
+            }],
+            runtime: {
+              phase: 'generating',
+              activeItemId: 'seed-item',
+              baselineAssistantCount: 0,
+              generationObserved: true,
+            },
+            createdAt: now - 5_000,
+            updatedAt: now - 4_000,
+          },
+        },
+      },
+    });
+  }, { storageKey: STORAGE_KEY, queueKey: 'conv:paused-recovery' });
+
+  const page = await openFixture(extensionContext, '/c/paused-recovery?seed-completed=1');
+  await expect.poll(async () => (await storedQueue(extensionWorker, 'conv:paused-recovery'))?.status).toBe('completed');
+  const recovered = await storedQueue(extensionWorker, 'conv:paused-recovery');
+  expect(recovered.items[0]?.state).toBe('completed');
+  await expect(queueRoot(page)).toContainText('Completed');
+  await expect(queueRoot(page)).not.toContainText('Running');
 });
 
 test('continues when the stop control is missed but the completed assistant turn is visible', async ({ extensionContext, extensionWorker }) => {

@@ -1,6 +1,11 @@
 import { DOMChatGPTAdapter } from './adapter/dom-chatgpt-adapter';
 import type { ClaimResult } from './coordinator/queue-coordinator';
 import type { ConversationQueue } from './domain/types';
+import { FlowRunBrowserController } from './flowrun/browser-controller';
+import { QueueBackedFlowRunHost } from './flowrun/content-host';
+import type { WorkflowRun } from './flowrun/events';
+import { chromeFlowRunStorageArea, FlowRunRunRepository } from './flowrun/run-repository';
+import { validateWorkflowDocument, type WorkflowDefinition } from './flowrun/schema';
 import { ChromeClient } from './runtime/chrome-client';
 import { conversationKeyFromUrl, shouldMigrateConversationKey } from './runtime/identity';
 import { QueueRunner } from './runtime/queue-runner';
@@ -9,6 +14,7 @@ import { QueuePanel } from './ui/queue-panel';
 const TEMP_SESSION_KEY = 'chatgpt-queue:temporary-key';
 const STABLE_WINDOW_MS = 900;
 const HEARTBEAT_MS = 10_000;
+const FLOWRUN_RECONCILE_MS = 500;
 
 const getTemporaryKey = (): string => {
   const existing = sessionStorage.getItem(TEMP_SESSION_KEY);
@@ -27,6 +33,18 @@ let ownsCurrent = false;
 let localNotice: string | undefined;
 let stableTimer: number | undefined;
 let evaluationTail: Promise<void> = Promise.resolve();
+let selectedWorkflow: WorkflowDefinition | undefined;
+let workflowRun: WorkflowRun | undefined;
+let workflowError: string | undefined;
+let recoveringDomBlock = false;
+
+const shouldObserveLifecycle = (queue: ConversationQueue | undefined): boolean => {
+  if (!queue) return false;
+  if (queue.status === 'running') return true;
+  return queue.status === 'paused'
+    && Boolean(queue.runtime.activeItemId)
+    && ['sending', 'waiting_generation_start', 'generating', 'waiting_stable_completion'].includes(queue.runtime.phase);
+};
 
 const host = document.createElement('div');
 host.id = 'chatgpt-queue-extension-root';
@@ -40,7 +58,11 @@ const render = async (): Promise<ConversationQueue | undefined> => {
     const notice = queue.blockedReason === 'dom-unrecognized'
       ? `DOM diagnostics: ${adapter.getDiagnosticSummary()}`
       : localNotice;
-    panel.render(queue, notice);
+    panel.render(queue, notice, {
+      ...(selectedWorkflow === undefined ? {} : { workflow: selectedWorkflow }),
+      ...(workflowRun === undefined ? {} : { run: workflowRun }),
+      ...(workflowError === undefined ? {} : { error: workflowError }),
+    });
   }
   return queue;
 };
@@ -87,15 +109,35 @@ const syncIdentity = async (): Promise<void> => {
   await attachExistingQueue();
 };
 
+const recoverDomUnrecognizedIfSafe = async (queue?: ConversationQueue): Promise<boolean> => {
+  const current = queue ?? await client.get(currentKey);
+  if (!current || current.status !== 'blocked' || current.blockedReason !== 'dom-unrecognized') return false;
+  if (!adapter.getState(false).domRecognized) return false;
+  if (recoveringDomBlock) return true;
+  recoveringDomBlock = true;
+  try {
+    if (!ownsCurrent && !await claimCurrent()) return false;
+    await client.request({ type: 'start', key: currentKey });
+    await render();
+    scheduleEvaluation(false);
+    return true;
+  } finally {
+    recoveringDomBlock = false;
+  }
+};
+
 const attachExistingQueue = async (): Promise<void> => {
   const queue = await ensureCurrent();
+  if (queue.status === 'blocked' && queue.blockedReason === 'dom-unrecognized') {
+    if (await recoverDomUnrecognizedIfSafe(queue)) return;
+  }
   if (queue.status !== 'running' && queue.status !== 'paused') {
     await render();
     return;
   }
   if (!await claimCurrent()) return;
   const recovered = await client.request<ConversationQueue>({ type: 'recover', key: currentKey });
-  if (recovered.status === 'running') scheduleEvaluation(false);
+  if (shouldObserveLifecycle(recovered)) scheduleEvaluation(false);
   await render();
 };
 
@@ -109,6 +151,90 @@ const startOrResume = async (): Promise<void> => {
 
 const mutateAndRender = async (request: Parameters<ChromeClient['request']>[0]): Promise<void> => {
   await client.request(request);
+  await render();
+};
+
+const waitForQueueSignal = (): Promise<void> => new Promise((resolve) => {
+  let settled = false;
+  const finish = () => {
+    if (settled) return;
+    settled = true;
+    window.clearTimeout(timer);
+    chrome.storage.onChanged.removeListener(listener);
+    resolve();
+  };
+  const listener = (_changes: Record<string, chrome.storage.StorageChange>, areaName: string) => {
+    if (areaName === 'local') finish();
+  };
+  const timer = window.setTimeout(finish, FLOWRUN_RECONCILE_MS);
+  chrome.storage.onChanged.addListener(listener);
+});
+
+const flowRunRepository = new FlowRunRunRepository(chromeFlowRunStorageArea());
+const flowRunHost = new QueueBackedFlowRunHost({
+  conversationKey: () => currentKey,
+  getQueue: async () => (await client.get(currentKey)) ?? ensureCurrent(),
+  addPrompt: async (content) => {
+    const queue = await client.request<ConversationQueue>({ type: 'add', key: currentKey, messages: [content] });
+    await render();
+    return queue;
+  },
+  startQueue: startOrResume,
+  latestAssistantArtifact: () => adapter.getLatestCompletedAssistantArtifact(),
+  waitForSignal: waitForQueueSignal,
+});
+const flowRunController = new FlowRunBrowserController({
+  host: flowRunHost,
+  repository: flowRunRepository,
+  onRunUpdated: (run) => {
+    workflowRun = run;
+    void render().catch(() => undefined);
+  },
+});
+
+const loadWorkflowText = async (text: string): Promise<void> => {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text) as unknown;
+  } catch (error) {
+    workflowError = `Invalid JSON: ${error instanceof Error ? error.message : String(error)}`;
+    await render();
+    return;
+  }
+
+  const validated = validateWorkflowDocument(parsed);
+  if (!validated.ok) {
+    workflowError = validated.errors.map((error) => `${error.code} ${error.path}: ${error.message}`).join(' | ');
+    await render();
+    return;
+  }
+
+  selectedWorkflow = validated.value;
+  workflowRun = undefined;
+  workflowError = undefined;
+  await render();
+};
+
+const runSelectedWorkflow = async (inputs: Record<string, string>): Promise<void> => {
+  if (!selectedWorkflow) {
+    workflowError = 'No workflow loaded.';
+    await render();
+    return;
+  }
+  workflowError = undefined;
+  await render();
+  try {
+    workflowRun = await flowRunController.run(selectedWorkflow, inputs);
+  } catch (error) {
+    workflowError = error instanceof Error ? error.message : String(error);
+  }
+  await render();
+};
+
+const clearSelectedWorkflow = async (): Promise<void> => {
+  selectedWorkflow = undefined;
+  workflowRun = undefined;
+  workflowError = undefined;
   await render();
 };
 
@@ -132,6 +258,9 @@ panel = new QueuePanel(host, {
     if (target === index) return;
     await mutateAndRender({ type: 'reorder', key: currentKey, itemId, queuedIndex: target });
   },
+  loadWorkflow: loadWorkflowText,
+  runWorkflow: runSelectedWorkflow,
+  clearWorkflow: clearSelectedWorkflow,
 });
 
 const armStableEvaluation = (): void => {
@@ -149,8 +278,8 @@ function scheduleEvaluation(domStable: boolean): void {
       if (!ownsCurrent) return;
       await runner.evaluate(currentKey, domStable);
       const queue = await render();
-      if (queue?.status === 'running' &&
-        (queue.runtime.phase === 'sending' || queue.runtime.phase === 'waiting_stable_completion')) {
+      if (shouldObserveLifecycle(queue) &&
+        (queue?.runtime.phase === 'sending' || queue?.runtime.phase === 'waiting_stable_completion')) {
         armStableEvaluation();
       }
       if (queue?.status === 'running' && queue.runtime.phase === 'ready_to_send_next') scheduleEvaluation(false);
@@ -162,16 +291,19 @@ function scheduleEvaluation(domStable: boolean): void {
 }
 
 const observer = new MutationObserver(() => {
-  void syncIdentity().catch(() => undefined);
-  armStableEvaluation();
-  scheduleEvaluation(false);
+  void (async () => {
+    await syncIdentity();
+    if (await recoverDomUnrecognizedIfSafe()) return;
+    armStableEvaluation();
+    scheduleEvaluation(false);
+  })().catch(() => undefined);
 });
 observer.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
 
 chrome.storage.onChanged.addListener((_changes, areaName) => {
   if (areaName !== 'local') return;
   void render().then((queue) => {
-    if (ownsCurrent && queue?.status === 'running') scheduleEvaluation(false);
+    if (ownsCurrent && shouldObserveLifecycle(queue)) scheduleEvaluation(false);
   }).catch(() => undefined);
 });
 
@@ -187,7 +319,8 @@ window.setInterval(() => {
   });
 }, HEARTBEAT_MS);
 
-void attachExistingQueue().then(() => {
+void attachExistingQueue().then(async () => {
+  await flowRunController.recoverInterrupted(currentKey);
   armStableEvaluation();
 }).catch(async (error: unknown) => {
   localNotice = error instanceof Error ? error.message : String(error);

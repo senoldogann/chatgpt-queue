@@ -2,6 +2,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { QueuePanel } from '../src/ui/queue-panel';
 import type { ConversationQueue } from '../src/domain/types';
+import type { WorkflowRun } from '../src/flowrun/events';
+import type { WorkflowDefinition } from '../src/flowrun/schema';
 
 const sampleQueue = (): ConversationQueue => ({
   version: 1,
@@ -163,6 +165,115 @@ describe('QueuePanel', () => {
     expect(root.querySelector('.dock')?.classList.contains('collapsed')).toBe(false);
     expect(sessionStorage.getItem('chatgpt-queue:panel-collapsed')).toBe('0');
     expect(root.querySelector('.panel')).toBe(firstPanel);
+  });
+
+
+  it('renders a loaded workflow, preserves inputs, and runs only when the normal queue is free', async () => {
+    const runWorkflow = vi.fn();
+    const clearWorkflow = vi.fn();
+    const host = document.createElement('div');
+    document.body.append(host);
+    const panel = new QueuePanel(host, { runWorkflow, clearWorkflow });
+    const workflow: WorkflowDefinition = {
+      version: 1,
+      name: 'review-pr',
+      inputs: {
+        diff: { type: 'string', required: true },
+        language: { type: 'string' },
+      },
+      steps: [
+        { id: 'review', type: 'chat', provider: 'chatgpt', prompt: 'Review {{ inputs.diff }}' },
+        { id: 'tests', type: 'chat', provider: 'chatgpt', prompt: 'Tests for {{ steps.review.output }}' },
+      ],
+    };
+
+    panel.render(sampleQueue(), undefined, { workflow });
+    let root = host.shadowRoot!;
+    expect(root.textContent).toContain('Workflow');
+    expect(root.textContent).toContain('review-pr');
+    expect(root.textContent).toContain('2 steps');
+    expect(root.textContent).toContain('Finish or clear the current queue before starting a workflow.');
+    expect(root.querySelector<HTMLButtonElement>('[data-action="run-workflow"]')!.disabled).toBe(true);
+
+    const idle: ConversationQueue = {
+      ...sampleQueue(),
+      status: 'completed',
+      items: sampleQueue().items.map((item) => ({ ...item, state: 'completed' as const })),
+      runtime: { phase: 'idle' },
+    };
+    panel.render(idle, undefined, { workflow });
+    root = host.shadowRoot!;
+    const diff = root.querySelector<HTMLInputElement>('[data-workflow-input="diff"]')!;
+    const language = root.querySelector<HTMLInputElement>('[data-workflow-input="language"]')!;
+    diff.value = 'diff content';
+    language.value = 'tr';
+    diff.focus();
+    diff.setSelectionRange(4, 4);
+
+    panel.render({ ...idle, updatedAt: 99 }, undefined, { workflow });
+    root = host.shadowRoot!;
+    expect(root.querySelector<HTMLInputElement>('[data-workflow-input="diff"]')!.value).toBe('diff content');
+    expect(root.activeElement).toBe(root.querySelector('[data-workflow-input="diff"]'));
+
+    root.querySelector<HTMLButtonElement>('[data-action="run-workflow"]')!.click();
+    root.querySelector<HTMLButtonElement>('[data-action="clear-workflow"]')!.click();
+    await Promise.resolve();
+
+    expect(runWorkflow).toHaveBeenCalledWith({ diff: 'diff content', language: 'tr' });
+    expect(clearWorkflow).toHaveBeenCalledTimes(1);
+  });
+
+  it('loads workflow text from a selected file and renders live run progress and block reason', async () => {
+    const loadWorkflow = vi.fn();
+    const host = document.createElement('div');
+    document.body.append(host);
+    const panel = new QueuePanel(host, { loadWorkflow });
+    const idle: ConversationQueue = {
+      ...sampleQueue(),
+      status: 'completed',
+      items: [],
+      runtime: { phase: 'idle' },
+    };
+
+    panel.render(idle, undefined, {});
+    const fileInput = host.shadowRoot!.querySelector<HTMLInputElement>('[data-role="workflow-file"]')!;
+    const fakeFile = { text: vi.fn(async () => '{"version":1}') } as unknown as File;
+    Object.defineProperty(fileInput, 'files', { value: [fakeFile] });
+    fileInput.dispatchEvent(new Event('change'));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(loadWorkflow).toHaveBeenCalledWith('{"version":1}');
+
+    const workflow: WorkflowDefinition = {
+      version: 1,
+      name: 'live-flow',
+      inputs: {},
+      steps: [
+        { id: 'first', type: 'chat', provider: 'chatgpt', prompt: 'one' },
+        { id: 'second', type: 'chat', provider: 'chatgpt', prompt: 'two' },
+      ],
+    };
+    const run: WorkflowRun = {
+      id: 'run-1',
+      workflowName: 'live-flow',
+      workflowVersion: 1,
+      status: 'blocked',
+      inputs: {},
+      steps: [
+        { id: 'first', status: 'completed', output: 'done' },
+        { id: 'second', status: 'blocked', error: 'message-delivery-timeout' },
+      ],
+      events: [],
+      createdAt: 1,
+      updatedAt: 2,
+      browser: { conversationKey: 'conv:a' },
+    };
+    panel.render(idle, undefined, { workflow, run });
+    const text = host.shadowRoot!.textContent!;
+    expect(text).toContain('Blocked');
+    expect(text).toContain('1 / 2');
+    expect(text).toContain('second');
+    expect(text).toContain('message-delivery-timeout');
   });
 
   it('shows a blocked reason', () => {

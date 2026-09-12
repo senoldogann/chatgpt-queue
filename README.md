@@ -45,6 +45,55 @@ npm run build
 
 The production extension is written to `dist/`.
 
+## FlowRun v0.2 live browser runtime
+
+This repository also contains **FlowRun**, a local-first deterministic workflow runtime for AI web workflows. FlowRun v0.2 can execute validated multi-step workflows directly inside the extension against the **current ChatGPT conversation**, while reusing the same fail-closed queue runner, ownership leases, dispatch reservations, completion detection, and recovery rules as normal queued messages.
+
+A workflow can chain assistant output into later prompts:
+
+```json
+{
+  "version": 1,
+  "name": "review-pr",
+  "inputs": {
+    "diff": { "type": "string", "required": true }
+  },
+  "steps": [
+    {
+      "id": "review",
+      "type": "chat",
+      "provider": "chatgpt",
+      "prompt": "Review this change:\n{{ inputs.diff }}"
+    },
+    {
+      "id": "tests",
+      "type": "chat",
+      "provider": "chatgpt",
+      "prompt": "Using this review:\n{{ steps.review.output }}\n\nWrite regression tests."
+    }
+  ]
+}
+```
+
+In the Queue panel, use **Workflow → Load workflow**, select a `.flowrun.json` or JSON workflow, fill required inputs, and choose **Run workflow**. FlowRun sends exactly one workflow step at a time through the existing queue path, captures the completed assistant response locally, persists run receipts/events, and then renders the next step.
+
+A live workflow refuses to start while normal queue items are queued/sending/running. If a page reload or extension restart interrupts an active workflow, the persisted run becomes `blocked: browser-session-interrupted`; it is never automatically resent. ChatGPT's `Message delivery timed out. Please try again.` UI is classified as `message-delivery-timeout` and also remains fail-closed with no automatic retry.
+
+FlowRun run history is stored separately in `chrome.storage.local` and is bounded to the 20 most recent runs. Workflow definitions, inputs, captured outputs, and receipts remain local; there is no telemetry, backend, API-key requirement, or external workflow service.
+
+The developer CLI remains useful for authoring and inspection:
+
+```bash
+npm run build:cli
+./dist-cli/flowrun.js validate examples/review-pr.flowrun.json
+./dist-cli/flowrun.js dry-run examples/review-pr.flowrun.json --input 'diff=example change'
+./dist-cli/flowrun.js inspect run.json
+```
+
+There is deliberately **no CLI-to-browser `flowrun run` transport yet**. Live execution is extension-driven in v0.2; CLI↔browser IPC is deferred until the browser runtime has accumulated more real-world reliability evidence.
+
+See `docs/superpowers/specs/2026-09-12-flowrun-v0.2-live-browser-design.md` for the live-runtime architecture and `examples/review-pr.flowrun.json` for a complete workflow example.
+
 ## Tests
 
 Run unit/integration tests:
@@ -98,6 +147,7 @@ Examples include:
 - Rate limits.
 - Expired session/login UI.
 - ChatGPT error or **Try again** UI.
+- Message delivery timeout (`message-delivery-timeout`).
 - Confirmation/tool approval dialogs.
 - Unrecognized ChatGPT DOM.
 - Conversation ownership conflicts.
@@ -116,7 +166,7 @@ Two different conversations use different queue records and can be driven indepe
 
 ## Storage and privacy
 
-Queue state and message contents are stored only in `chrome.storage.local` for this extension.
+Queue state, message contents, and bounded FlowRun run history are stored only in `chrome.storage.local` for this extension.
 
 The production manifest requests:
 
@@ -141,8 +191,12 @@ The project does not read browser cookies or credentials, call the OpenAI API, s
 - `src/adapter/` — ChatGPT DOM boundary.
 - `src/runtime/` — extension RPC/client/runner and conversation identity.
 - `src/ui/` — Shadow DOM queue panel.
+- `src/flowrun/` — FlowRun schema, templates, receipts, assertions, deterministic engine, bounded run storage, and queue-backed browser runtime.
+- `src/cli/` — FlowRun CLI commands and Node filesystem adapter.
+- `examples/` — FlowRun workflow examples.
 - `e2e/` — deterministic Chromium extension tests.
 - `scripts/build.mjs` — production build.
+- `scripts/build-cli.mjs` — Node CLI build.
 - `scripts/build-e2e.mjs` — test-only extension build.
 
 ## Verification
@@ -153,5 +207,6 @@ The main local verification sequence is:
 npm test
 npm run typecheck
 npm run build
+npm run build:cli
 npm run test:e2e
 ```
