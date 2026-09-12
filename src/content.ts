@@ -37,6 +37,14 @@ let selectedWorkflow: WorkflowDefinition | undefined;
 let workflowRun: WorkflowRun | undefined;
 let workflowError: string | undefined;
 
+const shouldObserveLifecycle = (queue: ConversationQueue | undefined): boolean => {
+  if (!queue) return false;
+  if (queue.status === 'running') return true;
+  return queue.status === 'paused'
+    && Boolean(queue.runtime.activeItemId)
+    && ['sending', 'waiting_generation_start', 'generating', 'waiting_stable_completion'].includes(queue.runtime.phase);
+};
+
 const host = document.createElement('div');
 host.id = 'chatgpt-queue-extension-root';
 (document.body ?? document.documentElement).append(host);
@@ -108,7 +116,7 @@ const attachExistingQueue = async (): Promise<void> => {
   }
   if (!await claimCurrent()) return;
   const recovered = await client.request<ConversationQueue>({ type: 'recover', key: currentKey });
-  if (recovered.status === 'running') scheduleEvaluation(false);
+  if (shouldObserveLifecycle(recovered)) scheduleEvaluation(false);
   await render();
 };
 
@@ -249,8 +257,8 @@ function scheduleEvaluation(domStable: boolean): void {
       if (!ownsCurrent) return;
       await runner.evaluate(currentKey, domStable);
       const queue = await render();
-      if (queue?.status === 'running' &&
-        (queue.runtime.phase === 'sending' || queue.runtime.phase === 'waiting_stable_completion')) {
+      if (shouldObserveLifecycle(queue) &&
+        (queue?.runtime.phase === 'sending' || queue?.runtime.phase === 'waiting_stable_completion')) {
         armStableEvaluation();
       }
       if (queue?.status === 'running' && queue.runtime.phase === 'ready_to_send_next') scheduleEvaluation(false);
@@ -271,7 +279,7 @@ observer.observe(document.documentElement, { subtree: true, childList: true, att
 chrome.storage.onChanged.addListener((_changes, areaName) => {
   if (areaName !== 'local') return;
   void render().then((queue) => {
-    if (ownsCurrent && queue?.status === 'running') scheduleEvaluation(false);
+    if (ownsCurrent && shouldObserveLifecycle(queue)) scheduleEvaluation(false);
   }).catch(() => undefined);
 });
 

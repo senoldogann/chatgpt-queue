@@ -80,6 +80,28 @@ describe('QueueRunner', () => {
     expect(backend.calls).toEqual(['waitingStable', 'complete']);
   });
 
+  it('continues observing a paused active item through completion without dispatching a new item', async () => {
+    const paused = { ...queue('waiting_stable_completion', 'running'), status: 'paused' as const };
+    const backend = new FakeBackend(paused);
+    const adapter = new FakeAdapter({ ...baseSnapshot, assistantMessageCount: 2, assistantCompletionControlPresent: true });
+
+    await new QueueRunner(adapter, backend).evaluate('conv:a', true);
+
+    expect(backend.calls).toEqual(['complete']);
+    expect(adapter.sent).toEqual([]);
+  });
+
+  it('never dispatches a new item while the queue is paused', async () => {
+    const paused = { ...queue('ready_to_send'), status: 'paused' as const };
+    const backend = new FakeBackend(paused);
+    const adapter = new FakeAdapter(baseSnapshot);
+
+    await new QueueRunner(adapter, backend).evaluate('conv:a', true);
+
+    expect(backend.calls).toEqual([]);
+    expect(adapter.sent).toEqual([]);
+  });
+
   it('blocks confirmation/error states without sending', async () => {
     const backend = new FakeBackend(queue('ready_to_send'));
     const adapter = new FakeAdapter({ ...baseSnapshot, confirmationVisible: true });

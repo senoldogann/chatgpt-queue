@@ -276,7 +276,7 @@ export class QueueCoordinator {
       const updated: ConversationQueue = {
         ...queue,
         items,
-        status: hasQueued ? 'running' : 'completed',
+        status: hasQueued ? (queue.status === 'paused' ? 'paused' : 'running') : 'completed',
         runtime: hasQueued ? { phase: 'ready_to_send_next' } : { phase: 'idle' },
         updatedAt: now,
       };

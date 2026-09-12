@@ -20,7 +20,11 @@ export class QueueRunner {
 
   async evaluate(key: string, domStable: boolean): Promise<void> {
     const queue = await this.backend.get(key);
-    if (!queue || queue.status !== 'running') return;
+    if (!queue) return;
+    const observingPausedActive = queue.status === 'paused'
+      && Boolean(queue.runtime.activeItemId)
+      && ['sending', 'waiting_generation_start', 'generating', 'waiting_stable_completion'].includes(queue.runtime.phase);
+    if (queue.status !== 'running' && !observingPausedActive) return;
 
     const snapshot = this.adapter.getState(domStable);
     const baselineAssistantCount = queue.runtime.baselineAssistantCount ?? snapshot.assistantMessageCount;

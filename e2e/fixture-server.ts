@@ -44,12 +44,26 @@ const pageHtml = `<!doctype html>
       const autoCompleteMs = Number(params.get('auto-complete-ms') ?? '0');
       const responseTexts = params.getAll('response');
       const deliveryTimeoutMode = params.get('delivery-timeout') === '1';
+      const seedCompleted = params.get('seed-completed') === '1';
       const storageKey = 'fixture-sends:' + conversationId;
       const composer = document.getElementById('prompt-textarea');
       let send = document.querySelector('[data-testid="send-button"]');
       const messages = document.getElementById('messages');
       let nextSendUncertain = false;
       let responseCount = 0;
+
+      if (seedCompleted) {
+        responseCount = 1;
+        const response = document.createElement('article');
+        response.dataset.messageAuthorRole = 'assistant';
+        response.textContent = 'already completed response';
+        const copy = document.createElement('button');
+        copy.type = 'button';
+        copy.dataset.testid = 'copy-turn-action-button';
+        copy.textContent = 'Copy';
+        response.append(copy);
+        messages.append(response);
+      }
 
       const readEvents = () => JSON.parse(localStorage.getItem(storageKey) ?? '[]');
       const recordSend = (content) => {
