@@ -9,6 +9,7 @@ export interface ExecuteWorkflowOptions {
   idFactory?: (prefix: string) => string;
   now?: () => number;
   onEvent?: (event: RunEvent) => void;
+  onRunUpdated?: (run: WorkflowRun) => void;
 }
 
 const defaultIdFactory = (prefix: string): string => `${prefix}:${crypto.randomUUID()}`;
@@ -50,6 +51,7 @@ export async function executeWorkflow(
     run.events.push(event);
     run.updatedAt = at;
     options.onEvent?.(event);
+    options.onRunUpdated?.(structuredClone(run));
   };
 
   emit('run.created', undefined, { workflowName: workflow.name });
