@@ -3,7 +3,9 @@ import type { ClaimResult } from './coordinator/queue-coordinator';
 import type { ConversationQueue } from './domain/types';
 import { FlowRunBrowserController } from './flowrun/browser-controller';
 import { QueueBackedFlowRunHost } from './flowrun/content-host';
+import type { WorkflowRun } from './flowrun/events';
 import { chromeFlowRunStorageArea, FlowRunRunRepository } from './flowrun/run-repository';
+import { validateWorkflowDocument, type WorkflowDefinition } from './flowrun/schema';
 import { ChromeClient } from './runtime/chrome-client';
 import { conversationKeyFromUrl, shouldMigrateConversationKey } from './runtime/identity';
 import { QueueRunner } from './runtime/queue-runner';
@@ -31,6 +33,9 @@ let ownsCurrent = false;
 let localNotice: string | undefined;
 let stableTimer: number | undefined;
 let evaluationTail: Promise<void> = Promise.resolve();
+let selectedWorkflow: WorkflowDefinition | undefined;
+let workflowRun: WorkflowRun | undefined;
+let workflowError: string | undefined;
 
 const host = document.createElement('div');
 host.id = 'chatgpt-queue-extension-root';
@@ -44,7 +49,11 @@ const render = async (): Promise<ConversationQueue | undefined> => {
     const notice = queue.blockedReason === 'dom-unrecognized'
       ? `DOM diagnostics: ${adapter.getDiagnosticSummary()}`
       : localNotice;
-    panel.render(queue, notice);
+    panel.render(queue, notice, {
+      ...(selectedWorkflow === undefined ? {} : { workflow: selectedWorkflow }),
+      ...(workflowRun === undefined ? {} : { run: workflowRun }),
+      ...(workflowError === undefined ? {} : { error: workflowError }),
+    });
   }
   return queue;
 };
@@ -148,7 +157,57 @@ const flowRunHost = new QueueBackedFlowRunHost({
 const flowRunController = new FlowRunBrowserController({
   host: flowRunHost,
   repository: flowRunRepository,
+  onRunUpdated: (run) => {
+    workflowRun = run;
+    void render().catch(() => undefined);
+  },
 });
+
+const loadWorkflowText = async (text: string): Promise<void> => {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text) as unknown;
+  } catch (error) {
+    workflowError = `Invalid JSON: ${error instanceof Error ? error.message : String(error)}`;
+    await render();
+    return;
+  }
+
+  const validated = validateWorkflowDocument(parsed);
+  if (!validated.ok) {
+    workflowError = validated.errors.map((error) => `${error.code} ${error.path}: ${error.message}`).join(' | ');
+    await render();
+    return;
+  }
+
+  selectedWorkflow = validated.value;
+  workflowRun = undefined;
+  workflowError = undefined;
+  await render();
+};
+
+const runSelectedWorkflow = async (inputs: Record<string, string>): Promise<void> => {
+  if (!selectedWorkflow) {
+    workflowError = 'No workflow loaded.';
+    await render();
+    return;
+  }
+  workflowError = undefined;
+  await render();
+  try {
+    workflowRun = await flowRunController.run(selectedWorkflow, inputs);
+  } catch (error) {
+    workflowError = error instanceof Error ? error.message : String(error);
+  }
+  await render();
+};
+
+const clearSelectedWorkflow = async (): Promise<void> => {
+  selectedWorkflow = undefined;
+  workflowRun = undefined;
+  workflowError = undefined;
+  await render();
+};
 
 panel = new QueuePanel(host, {
   add: async (content) => mutateAndRender({ type: 'add', key: currentKey, messages: [content] }),
@@ -170,6 +229,9 @@ panel = new QueuePanel(host, {
     if (target === index) return;
     await mutateAndRender({ type: 'reorder', key: currentKey, itemId, queuedIndex: target });
   },
+  loadWorkflow: loadWorkflowText,
+  runWorkflow: runSelectedWorkflow,
+  clearWorkflow: clearSelectedWorkflow,
 });
 
 const armStableEvaluation = (): void => {
