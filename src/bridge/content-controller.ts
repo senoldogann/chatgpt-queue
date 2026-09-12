@@ -15,7 +15,11 @@ export interface BridgeJobUpdate {
 }
 
 export interface BridgeContentControllerOptions {
-  run(workflow: WorkflowDefinition, inputs: Record<string, string>): Promise<WorkflowRun>;
+  run(
+    workflow: WorkflowDefinition,
+    inputs: Record<string, string>,
+    context: { bridgeJobId: string },
+  ): Promise<WorkflowRun>;
   publish(jobId: string, update: BridgeJobUpdate): Promise<void>;
 }
 
@@ -26,6 +30,36 @@ const terminalError = (run: WorkflowRun): string | undefined => {
   }
   return undefined;
 };
+
+export async function publishRecoveredBridgeRun(
+  run: WorkflowRun,
+  publish: (jobId: string, update: BridgeJobUpdate) => Promise<void>,
+): Promise<boolean> {
+  const jobId = run.browser?.bridgeJobId;
+  if (!jobId) return false;
+
+  if (run.status === 'completed') {
+    await publish(jobId, { status: 'completed', workflowRunId: run.id });
+    return true;
+  }
+  if (run.status === 'blocked') {
+    await publish(jobId, {
+      status: 'blocked',
+      workflowRunId: run.id,
+      error: terminalError(run) ?? 'workflow-blocked',
+    });
+    return true;
+  }
+  if (run.status === 'failed') {
+    await publish(jobId, {
+      status: 'failed',
+      workflowRunId: run.id,
+      error: terminalError(run) ?? 'workflow-failed',
+    });
+    return true;
+  }
+  return false;
+}
 
 export class BridgeContentController {
   private readonly active = new Map<string, Promise<void>>();
@@ -47,7 +81,7 @@ export class BridgeContentController {
   private async execute(job: BridgeRunJob): Promise<void> {
     await this.options.publish(job.jobId, { status: 'running' });
     try {
-      const run = await this.options.run(job.workflow, { ...job.inputs });
+      const run = await this.options.run(job.workflow, { ...job.inputs }, { bridgeJobId: job.jobId });
       if (run.status === 'completed') {
         await this.options.publish(job.jobId, { status: 'completed', workflowRunId: run.id });
         return;

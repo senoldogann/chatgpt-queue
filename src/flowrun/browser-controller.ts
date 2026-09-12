@@ -16,6 +16,10 @@ export interface BrowserRunRepository {
   ): Promise<WorkflowRun | undefined>;
 }
 
+export interface BrowserRunContext {
+  bridgeJobId?: string;
+}
+
 export interface FlowRunBrowserControllerOptions {
   host: BrowserChatProviderHost;
   repository: BrowserRunRepository;
@@ -37,6 +41,7 @@ export class FlowRunBrowserController {
   private readonly now: () => number;
   private current: WorkflowRun | undefined;
   private persistTail: Promise<void> = Promise.resolve();
+  private runContext: BrowserRunContext = {};
 
   constructor(private readonly options: FlowRunBrowserControllerOptions) {
     this.provider = options.provider ?? new BrowserChatProvider(options.host);
@@ -48,22 +53,34 @@ export class FlowRunBrowserController {
     return this.current ? structuredClone(this.current) : undefined;
   }
 
+  private browserMetadata(): NonNullable<WorkflowRun['browser']> {
+    return {
+      conversationKey: this.options.host.conversationKey(),
+      ...(this.runContext.bridgeJobId === undefined ? {} : { bridgeJobId: this.runContext.bridgeJobId }),
+    };
+  }
+
   private capture(run: WorkflowRun): void {
     const snapshot: WorkflowRun = {
       ...structuredClone(run),
-      browser: { conversationKey: this.options.host.conversationKey() },
+      browser: this.browserMetadata(),
     };
     this.current = snapshot;
     this.options.onRunUpdated?.(structuredClone(snapshot));
     this.persistTail = this.persistTail.then(() => this.options.repository.put(snapshot));
   }
 
-  async run(workflow: WorkflowDefinition, inputs: Record<string, string>): Promise<WorkflowRun> {
+  async run(
+    workflow: WorkflowDefinition,
+    inputs: Record<string, string>,
+    context: BrowserRunContext = {},
+  ): Promise<WorkflowRun> {
     const queue = await this.options.host.getQueue();
     if (queueBusy(queue)) throw new Error('queue-busy');
 
     this.current = undefined;
     this.persistTail = Promise.resolve();
+    this.runContext = { ...context };
 
     const run = await executeWorkflow(workflow, inputs, { chatgpt: this.provider }, {
       idFactory: this.idFactory,
@@ -74,7 +91,7 @@ export class FlowRunBrowserController {
 
     const final = this.current ?? {
       ...structuredClone(run),
-      browser: { conversationKey: this.options.host.conversationKey() },
+      browser: this.browserMetadata(),
     };
     this.current = structuredClone(final);
     return structuredClone(final);

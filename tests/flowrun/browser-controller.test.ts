@@ -130,6 +130,30 @@ describe('FlowRunBrowserController', () => {
     expect(repository.puts.at(-1)?.browser?.conversationKey).toBe('conv:browser');
   });
 
+  it('persists a durable bridge job link on every browser run snapshot when provided', async () => {
+    const repository = new RecordingRepository();
+    const provider: ChatProvider = {
+      id: 'chatgpt',
+      execute: async (request) => ({
+        kind: 'completed',
+        output: 'done',
+        receipt: { provider: 'chatgpt', dispatchToken: request.dispatchToken },
+      }),
+    };
+    const controller = new FlowRunBrowserController({
+      host: new FakeHost(),
+      repository,
+      provider,
+      idFactory: ids(),
+    });
+
+    const run = await controller.run(workflow(), { topic: 'queues' }, { bridgeJobId: 'job-bridge-1' });
+
+    expect(run.browser).toEqual({ conversationKey: 'conv:browser', bridgeJobId: 'job-bridge-1' });
+    expect(repository.puts.length).toBeGreaterThan(0);
+    expect(repository.puts.every((snapshot) => snapshot.browser?.bridgeJobId === 'job-bridge-1')).toBe(true);
+  });
+
   it('recovers an interrupted persisted run without invoking a provider', async () => {
     const repository = new RecordingRepository();
     repository.interrupted = {
