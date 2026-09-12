@@ -20,6 +20,7 @@ export function evaluateRuntime(input: RuntimeEvaluationInput): RuntimeDecision 
 
   const hasNewAssistant = snapshot.assistantMessageCount > baselineAssistantCount;
   const pageReady = snapshot.composerReady && !snapshot.isGenerating;
+  const completionEvidence = generationObserved || snapshot.assistantCompletionControlPresent;
 
   switch (phase) {
     case 'ready_to_send':
@@ -41,12 +42,12 @@ export function evaluateRuntime(input: RuntimeEvaluationInput): RuntimeDecision 
     case 'generating':
       if (snapshot.isGenerating && !generationObserved) return { action: 'generation_started', controlObserved: true };
       if (snapshot.isGenerating) return { action: 'wait' };
-      if (generationObserved && hasNewAssistant && pageReady) return { action: 'wait_for_stability' };
+      if (completionEvidence && hasNewAssistant && pageReady) return { action: 'wait_for_stability' };
       return { action: 'wait' };
 
     case 'waiting_stable_completion':
       if (snapshot.isGenerating) return { action: 'generation_started', controlObserved: true };
-      if (generationObserved && hasNewAssistant && pageReady && snapshot.domStable) return { action: 'complete' };
+      if (completionEvidence && hasNewAssistant && pageReady && snapshot.domStable) return { action: 'complete' };
       return { action: 'wait' };
 
     default:

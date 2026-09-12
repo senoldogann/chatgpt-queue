@@ -107,6 +107,29 @@ describe('DOMChatGPTAdapter', () => {
     expect(adapter.getState(true).assistantMessageCount).toBe(2);
   });
 
+  it('detects completion control only on the latest assistant turn', () => {
+    const adapter = render(`
+      <main>
+        <div id="prompt-textarea" contenteditable="true"></div>
+        <button data-testid="send-button">Send</button>
+        <section data-testid="conversation-turn-old">
+          <article data-message-author-role="assistant">old</article>
+          <button data-testid="copy-turn-action-button">Copy</button>
+        </section>
+        <section data-testid="conversation-turn-new">
+          <article data-message-author-role="assistant">new</article>
+        </section>
+      </main>`);
+
+    expect(adapter.getState(true).assistantCompletionControlPresent).toBe(false);
+
+    document.querySelector('[data-testid="conversation-turn-new"]')!.insertAdjacentHTML(
+      'beforeend',
+      '<button data-testid="copy-turn-action-button">Copy</button>',
+    );
+    expect(adapter.getState(true).assistantCompletionControlPresent).toBe(true);
+  });
+
   it('writes the composer and clicks send exactly once', async () => {
     const adapter = render(`
       <main>

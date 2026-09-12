@@ -40,6 +40,8 @@ const pageHtml = `<!doctype html>
       const routeOnSend = params.get('route-on-send');
       const routeChainFinal = params.get('route-chain-final');
       const delayedStopMs = Number(params.get('delayed-stop-ms') ?? '0');
+      const omitStop = params.get('omit-stop') === '1';
+      const autoCompleteMs = Number(params.get('auto-complete-ms') ?? '0');
       const storageKey = 'fixture-sends:' + conversationId;
       const composer = document.getElementById('prompt-textarea');
       let send = document.querySelector('[data-testid="send-button"]');
@@ -77,8 +79,47 @@ const pageHtml = `<!doctype html>
           stop.textContent = 'Stop';
           document.getElementById('chat').append(stop);
         };
-        if (delayedStopMs) window.setTimeout(appendStop, delayedStopMs);
-        else appendStop();
+        if (!omitStop) {
+          if (delayedStopMs) window.setTimeout(appendStop, delayedStopMs);
+          else appendStop();
+        }
+      };
+
+      const completeGeneration = () => {
+        document.querySelector('[data-testid="stop-button"], button[aria-label="Stop generating"]')?.remove();
+        responseCount += 1;
+        const existingResponse = messages.querySelector('[data-message-author-role="assistant"]:last-child');
+        let completedResponse;
+        if (existingResponse) {
+          existingResponse.textContent = 'assistant response ' + responseCount;
+          completedResponse = existingResponse;
+        } else {
+          const response = document.createElement('article');
+          response.dataset.messageAuthorRole = 'assistant';
+          response.textContent = 'assistant response ' + responseCount;
+          messages.append(response);
+          completedResponse = response;
+        }
+        const copy = document.createElement('button');
+        copy.type = 'button';
+        copy.dataset.testid = 'copy-turn-action-button';
+        copy.textContent = 'Copy';
+        completedResponse.append(copy);
+
+        const restoreComposer = () => {
+          composer.disabled = false;
+          composer.value = '';
+          if (authenticatedMode) removeSendControl();
+          else if (send) send.disabled = false;
+          if (!composer.isConnected) document.getElementById('chat').append(composer);
+        };
+
+        if (transientGapMode) {
+          composer.remove();
+          window.setTimeout(restoreComposer, 100);
+        } else {
+          restoreComposer();
+        }
       };
 
       const handleSend = () => {
@@ -92,6 +133,7 @@ const pageHtml = `<!doctype html>
           return;
         }
         beginGeneration();
+        if (autoCompleteMs > 0) window.setTimeout(completeGeneration, autoCompleteMs);
         if (routeOnSend && location.pathname === '/new') {
           history.pushState({}, '', '/c/' + routeOnSend);
           if (routeChainFinal) {
@@ -127,33 +169,7 @@ const pageHtml = `<!doctype html>
         });
       }
 
-      document.getElementById('fixture-complete').addEventListener('click', () => {
-        document.querySelector('[data-testid="stop-button"], button[aria-label="Stop generating"]')?.remove();
-        responseCount += 1;
-        const existingResponse = messages.querySelector('[data-message-author-role="assistant"]:last-child');
-        if (existingResponse) existingResponse.textContent = 'assistant response ' + responseCount;
-        else {
-          const response = document.createElement('article');
-          response.dataset.messageAuthorRole = 'assistant';
-          response.textContent = 'assistant response ' + responseCount;
-          messages.append(response);
-        }
-
-        const restoreComposer = () => {
-          composer.disabled = false;
-          composer.value = '';
-          if (authenticatedMode) removeSendControl();
-          else if (send) send.disabled = false;
-          if (!composer.isConnected) document.getElementById('chat').append(composer);
-        };
-
-        if (transientGapMode) {
-          composer.remove();
-          window.setTimeout(restoreComposer, 100);
-        } else {
-          restoreComposer();
-        }
-      });
+      document.getElementById('fixture-complete').addEventListener('click', completeGeneration);
 
       document.getElementById('fixture-duplicate').addEventListener('click', () => {
         const marker = document.createElement('span');

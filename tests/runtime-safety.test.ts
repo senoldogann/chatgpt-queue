@@ -9,6 +9,7 @@ const snapshot = (overrides: Partial<PageSnapshot> = {}): PageSnapshot => ({
   composerReady: true,
   sendControlPresent: true,
   assistantMessageCount: 1,
+  assistantCompletionControlPresent: false,
   domStable: false,
   confirmationVisible: false,
   blockingReason: null,

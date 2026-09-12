@@ -60,6 +60,7 @@ export interface PageSnapshot {
   composerReady: boolean;
   sendControlPresent: boolean;
   assistantMessageCount: number;
+  assistantCompletionControlPresent: boolean;
   domStable: boolean;
   confirmationVisible: boolean;
   blockingReason: string | null;
