@@ -20,6 +20,7 @@ await build({
   sourcemap: false,
   minify: false,
   legalComments: 'none',
+  define: { __FLOWRUN_E2E__: 'true' },
 });
 
 const manifest = JSON.parse(await readFile(resolve(root, 'manifest.json'), 'utf8'));

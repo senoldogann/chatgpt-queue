@@ -1,10 +1,10 @@
 import type { DispatchReservation } from '../coordinator/queue-coordinator';
 import type { ConversationQueue } from '../domain/types';
 import type { RunnerBackend } from './queue-runner';
-import type { BackgroundEnvelope, BackgroundRequest } from './protocol';
+import type { BackgroundEnvelope, ExtensionRequest } from './protocol';
 
 export class ChromeClient implements RunnerBackend {
-  async request<T>(request: BackgroundRequest): Promise<T> {
+  async request<T>(request: ExtensionRequest): Promise<T> {
     const response = await chrome.runtime.sendMessage(request) as BackgroundEnvelope;
     if (!response?.ok) throw new Error(response?.error ?? 'extension-request-failed');
     return response.data as T;

@@ -1,4 +1,7 @@
+declare const __FLOWRUN_E2E__: boolean;
+
 import { DOMChatGPTAdapter } from './adapter/dom-chatgpt-adapter';
+import { BridgeContentController } from './bridge/content-controller';
 import type { ClaimResult } from './coordinator/queue-coordinator';
 import type { ConversationQueue } from './domain/types';
 import { FlowRunBrowserController } from './flowrun/browser-controller';
@@ -8,6 +11,7 @@ import { chromeFlowRunStorageArea, FlowRunRunRepository } from './flowrun/run-re
 import { validateWorkflowDocument, type WorkflowDefinition } from './flowrun/schema';
 import { ChromeClient } from './runtime/chrome-client';
 import { conversationKeyFromUrl, shouldMigrateConversationKey } from './runtime/identity';
+import type { BridgeRunMessage } from './runtime/protocol';
 import { QueueRunner } from './runtime/queue-runner';
 import { QueuePanel } from './ui/queue-panel';
 
@@ -36,6 +40,8 @@ let evaluationTail: Promise<void> = Promise.resolve();
 let selectedWorkflow: WorkflowDefinition | undefined;
 let workflowRun: WorkflowRun | undefined;
 let workflowError: string | undefined;
+let bridgeTargetId: string | undefined;
+let bridgeState: 'disabled' | 'disconnected' | 'connected' = 'disconnected';
 let recoveringDomBlock = false;
 
 const shouldObserveLifecycle = (queue: ConversationQueue | undefined): boolean => {
@@ -70,6 +76,25 @@ const render = async (): Promise<ConversationQueue | undefined> => {
 const ensureCurrent = async (): Promise<ConversationQueue> =>
   client.request({ type: 'ensure', key: currentKey });
 
+const registerBridgeTarget = async (): Promise<void> => {
+  const queue = (await client.get(currentKey)) ?? await ensureCurrent();
+  const hasActiveItem = queue.items.some((item) => ['queued', 'sending', 'running'].includes(item.state));
+  const busy = hasActiveItem
+    || ['running', 'paused', 'blocked'].includes(queue.status)
+    || workflowRun?.status === 'running'
+    || workflowRun?.status === 'pending';
+  const response = await client.request<{ target: { targetId: string }; state: 'disabled' | 'disconnected' | 'connected' }>({
+    type: 'bridgeRegister',
+    conversationKey: currentKey,
+    queueStatus: queue.status,
+    ...(workflowRun === undefined ? {} : { workflowStatus: workflowRun.status }),
+    busy,
+  });
+  bridgeTargetId = response.target.targetId;
+  bridgeState = response.state;
+  if (__FLOWRUN_E2E__) host.dataset.flowrunBridgeTarget = bridgeTargetId;
+};
+
 const claimCurrent = async (): Promise<boolean> => {
   const claim = await client.request<ClaimResult>({ type: 'claim', key: currentKey });
   if (claim.kind === 'conflict') {
@@ -98,6 +123,7 @@ const syncIdentity = async (): Promise<void> => {
         if (!await claimCurrent()) return;
       }
       await render();
+      await registerBridgeTarget().catch(() => undefined);
       return;
     } catch (error) {
       localNotice = `Queue migration stopped: ${error instanceof Error ? error.message : String(error)}`;
@@ -107,6 +133,7 @@ const syncIdentity = async (): Promise<void> => {
     await ensureCurrent();
   }
   await attachExistingQueue();
+  await registerBridgeTarget().catch(() => undefined);
 };
 
 const recoverDomUnrecognizedIfSafe = async (queue?: ConversationQueue): Promise<boolean> => {
@@ -190,6 +217,35 @@ const flowRunController = new FlowRunBrowserController({
     workflowRun = run;
     void render().catch(() => undefined);
   },
+});
+
+const bridgeContentController = new BridgeContentController({
+  run: async (workflow, inputs) => {
+    selectedWorkflow = workflow;
+    workflowError = undefined;
+    await render();
+    return flowRunController.run(workflow, inputs);
+  },
+  publish: async (jobId, update) => {
+    await client.request({ type: 'bridgeJobUpdate', jobId, ...update });
+    await registerBridgeTarget().catch(() => undefined);
+  },
+});
+
+chrome.runtime.onMessage.addListener((message: BridgeRunMessage, _sender, sendResponse: (response: { ok: boolean; error?: string }) => void) => {
+  if (!message || typeof message !== 'object' || message.type !== 'bridgeRun') return false;
+  if (!bridgeTargetId || message.targetId !== bridgeTargetId) {
+    sendResponse({ ok: false, error: 'bridge-target-mismatch' });
+    return false;
+  }
+  const validated = validateWorkflowDocument(message.workflow);
+  if (!validated.ok || !message.inputs || typeof message.inputs !== 'object' || Object.values(message.inputs).some((value) => typeof value !== 'string')) {
+    sendResponse({ ok: false, error: 'bridge-invalid-run' });
+    return false;
+  }
+  void bridgeContentController.accept({ jobId: message.jobId, workflow: validated.value, inputs: { ...message.inputs } });
+  sendResponse({ ok: true });
+  return false;
 });
 
 const loadWorkflowText = async (text: string): Promise<void> => {
@@ -308,6 +364,7 @@ chrome.storage.onChanged.addListener((_changes, areaName) => {
 });
 
 window.setInterval(() => {
+  void registerBridgeTarget().catch(() => undefined);
   if (!ownsCurrent) return;
   void client.get(currentKey).then((queue) => {
     if (queue?.status === 'running' || queue?.status === 'paused') {
@@ -321,6 +378,7 @@ window.setInterval(() => {
 
 void attachExistingQueue().then(async () => {
   await flowRunController.recoverInterrupted(currentKey);
+  await registerBridgeTarget().catch(() => undefined);
   armStableEvaluation();
 }).catch(async (error: unknown) => {
   localNotice = error instanceof Error ? error.message : String(error);

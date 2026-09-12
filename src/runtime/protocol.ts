@@ -1,3 +1,5 @@
+import type { WorkflowDefinition } from '../flowrun/schema';
+
 export type BackgroundRequest =
   | { type: 'ensure'; key: string }
   | { type: 'get'; key: string }
@@ -34,6 +36,14 @@ export type BridgeControlRequest =
       workflowRunId?: string;
       error?: string;
     };
+
+export interface BridgeRunMessage {
+  type: 'bridgeRun';
+  jobId: string;
+  targetId: string;
+  workflow: WorkflowDefinition;
+  inputs: Record<string, string>;
+}
 
 export type ExtensionRequest = BackgroundRequest | BridgeControlRequest;
 
