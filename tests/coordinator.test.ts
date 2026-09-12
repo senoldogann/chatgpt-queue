@@ -41,6 +41,8 @@ describe('queue coordinator', () => {
     await coordinator.start('conv:a', 1);
 
     const first = await coordinator.reserveNext('conv:a', 1, 4);
+    const reservedQueue = await coordinator.get('conv:a');
+    expect(reservedQueue?.runtime.baselineAssistantCount).toBe(4);
     expect(first).toMatchObject({ content: 'one' });
     expect(await coordinator.reserveNext('conv:a', 1, 4)).toBeNull();
 
@@ -161,4 +163,16 @@ describe('queue coordinator', () => {
     expect((await coordinator.get('conv:b'))?.status).toBe('idle');
     expect((await coordinator.get('conv:b'))?.items[0]?.content).toBe('b1');
   });
+
+  it('stores the baseline assistant turn key with the dispatch reservation', async () => {
+    const { coordinator } = setup();
+    await coordinator.add('conv:turn-key', ['one']);
+    await coordinator.claim('conv:turn-key', 1);
+    await coordinator.start('conv:turn-key', 1);
+    await coordinator.reserveNext('conv:turn-key', 1, 7, 'turn-before-send');
+    const current = await coordinator.get('conv:turn-key');
+    expect(current?.runtime.baselineAssistantCount).toBe(7);
+    expect(current?.runtime.baselineAssistantTurnKey).toBe('turn-before-send');
+  });
+
 });

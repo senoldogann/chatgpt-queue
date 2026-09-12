@@ -76,4 +76,62 @@ describe('runtime state machine', () => {
   it('blocks if the page becomes send-ready without evidence that generation ever started', () => {
     expect(decide('waiting_generation_start', safe(), 1, false)).toEqual({ action: 'block', reason: 'generation-start-not-observed' });
   });
+  it('detects a new assistant turn even when virtualization keeps the assistant count unchanged', () => {
+    const generating = evaluateRuntime({
+      phase: 'generating',
+      snapshot: safe({
+        assistantMessageCount: 50,
+        assistantCompletionControlPresent: true,
+        latestAssistantTurnKey: 'turn-new',
+      }),
+      baselineAssistantCount: 50,
+      baselineAssistantTurnKey: 'turn-old',
+      generationObserved: true,
+    });
+    expect(generating).toEqual({ action: 'wait_for_stability' });
+
+    const stable = evaluateRuntime({
+      phase: 'waiting_stable_completion',
+      snapshot: safe({
+        assistantMessageCount: 50,
+        assistantCompletionControlPresent: true,
+        latestAssistantTurnKey: 'turn-new',
+        domStable: true,
+      }),
+      baselineAssistantCount: 50,
+      baselineAssistantTurnKey: 'turn-old',
+      generationObserved: true,
+    });
+    expect(stable).toEqual({ action: 'complete' });
+  });
+
+  it('does not treat the same assistant turn as new when the count is unchanged', () => {
+    expect(evaluateRuntime({
+      phase: 'waiting_stable_completion',
+      snapshot: safe({
+        assistantMessageCount: 50,
+        assistantCompletionControlPresent: true,
+        latestAssistantTurnKey: 'turn-old',
+        domStable: true,
+      }),
+      baselineAssistantCount: 50,
+      baselineAssistantTurnKey: 'turn-old',
+      generationObserved: true,
+    })).toEqual({ action: 'wait' });
+  });
+
+  it('can reconcile a legacy running item without a stored turn key when generation was observed and the latest turn is completed', () => {
+    expect(evaluateRuntime({
+      phase: 'waiting_stable_completion',
+      snapshot: safe({
+        assistantMessageCount: 50,
+        assistantCompletionControlPresent: true,
+        latestAssistantTurnKey: 'turn-current',
+        domStable: true,
+      }),
+      baselineAssistantCount: 50,
+      generationObserved: true,
+    })).toEqual({ action: 'complete' });
+  });
+
 });

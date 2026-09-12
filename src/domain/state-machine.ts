@@ -4,6 +4,7 @@ export interface RuntimeEvaluationInput {
   phase: RuntimePhase;
   snapshot: PageSnapshot;
   baselineAssistantCount: number;
+  baselineAssistantTurnKey?: string;
   generationObserved: boolean;
 }
 
@@ -14,13 +15,23 @@ const blockReason = (snapshot: PageSnapshot): string | null => {
 };
 
 export function evaluateRuntime(input: RuntimeEvaluationInput): RuntimeDecision {
-  const { phase, snapshot, baselineAssistantCount, generationObserved } = input;
+  const { phase, snapshot, baselineAssistantCount, baselineAssistantTurnKey, generationObserved } = input;
   const blocked = blockReason(snapshot);
   if (blocked) return { action: 'block', reason: blocked };
 
-  const hasNewAssistant = snapshot.assistantMessageCount > baselineAssistantCount;
+  const assistantIdentityAdvanced = Boolean(
+    baselineAssistantTurnKey
+    && snapshot.latestAssistantTurnKey
+    && snapshot.latestAssistantTurnKey !== baselineAssistantTurnKey
+  );
+  const hasNewAssistant = snapshot.assistantMessageCount > baselineAssistantCount || assistantIdentityAdvanced;
   const pageReady = snapshot.composerReady && !snapshot.isGenerating;
   const completionEvidence = generationObserved || snapshot.assistantCompletionControlPresent;
+  const legacyCompletionTarget = !baselineAssistantTurnKey
+    && generationObserved
+    && snapshot.assistantCompletionControlPresent
+    && pageReady;
+  const hasCompletionTarget = hasNewAssistant || legacyCompletionTarget;
 
   switch (phase) {
     case 'ready_to_send':
@@ -42,12 +53,12 @@ export function evaluateRuntime(input: RuntimeEvaluationInput): RuntimeDecision 
     case 'generating':
       if (snapshot.isGenerating && !generationObserved) return { action: 'generation_started', controlObserved: true };
       if (snapshot.isGenerating) return { action: 'wait' };
-      if (completionEvidence && hasNewAssistant && pageReady) return { action: 'wait_for_stability' };
+      if (completionEvidence && hasCompletionTarget && pageReady) return { action: 'wait_for_stability' };
       return { action: 'wait' };
 
     case 'waiting_stable_completion':
       if (snapshot.isGenerating) return { action: 'generation_started', controlObserved: true };
-      if (completionEvidence && hasNewAssistant && pageReady && snapshot.domStable) return { action: 'complete' };
+      if (completionEvidence && hasCompletionTarget && pageReady && snapshot.domStable) return { action: 'complete' };
       return { action: 'wait' };
 
     default:
