@@ -40,6 +40,8 @@ export interface QueueRuntime {
   baselineAssistantCount?: number;
   baselineAssistantTurnKey?: string;
   generationObserved?: boolean;
+  /** When the runtime first waited for a quiescent DOM before completing the active item. */
+  stableWaitStartedAt?: number;
 }
 
 export interface ConversationQueue {

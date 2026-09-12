@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { evaluateRuntime } from '../src/domain/state-machine';
+import { COMPLETION_QUIET_GRACE_MS, evaluateRuntime } from '../src/domain/state-machine';
 import type { PageSnapshot, RuntimePhase } from '../src/domain/types';
 
 const safe = (overrides: Partial<PageSnapshot> = {}): PageSnapshot => ({
@@ -60,6 +60,37 @@ describe('runtime state machine', () => {
   it('completes only when a new assistant response exists and DOM is stable', () => {
     expect(decide('waiting_stable_completion', safe({ assistantMessageCount: 2, domStable: true }), 1, true).action).toBe('complete');
     expect(decide('waiting_stable_completion', safe({ assistantMessageCount: 1, domStable: true }), 1, true).action).toBe('wait');
+  });
+
+  it('completes a proven completion without a quiet DOM once the bounded grace elapses', () => {
+    const waiting = (completionWaitMs: number) => evaluateRuntime({
+      phase: 'waiting_stable_completion',
+      snapshot: safe({ assistantMessageCount: 2, domStable: false }),
+      baselineAssistantCount: 1,
+      generationObserved: true,
+      completionWaitMs,
+    });
+
+    expect(waiting(COMPLETION_QUIET_GRACE_MS - 1)).toEqual({ action: 'wait' });
+    expect(waiting(COMPLETION_QUIET_GRACE_MS)).toEqual({ action: 'complete' });
+  });
+
+  it('keeps the bounded grace fail-closed when completion evidence is missing or generation resumed', () => {
+    expect(evaluateRuntime({
+      phase: 'waiting_stable_completion',
+      snapshot: safe({ assistantMessageCount: 1, domStable: false }),
+      baselineAssistantCount: 1,
+      generationObserved: false,
+      completionWaitMs: COMPLETION_QUIET_GRACE_MS * 100,
+    })).toEqual({ action: 'wait' });
+
+    expect(evaluateRuntime({
+      phase: 'waiting_stable_completion',
+      snapshot: safe({ assistantMessageCount: 2, domStable: false, isGenerating: true }),
+      baselineAssistantCount: 1,
+      generationObserved: true,
+      completionWaitMs: COMPLETION_QUIET_GRACE_MS * 100,
+    })).toEqual({ action: 'generation_started', controlObserved: true });
   });
 
   it('waits through a transient unrecognized DOM until it becomes stable', () => {
@@ -132,6 +163,29 @@ describe('runtime state machine', () => {
       baselineAssistantCount: 50,
       generationObserved: true,
     })).toEqual({ action: 'complete' });
+  });
+
+  it('allows only an explicitly eligible legacy runtime to enter completion stability without turn identity', () => {
+    const legacySnapshot = safe({
+      assistantMessageCount: 3,
+      latestAssistantTurnKey: 'assistant:3:final',
+      assistantCompletionControlPresent: false,
+    });
+    expect(evaluateRuntime({
+      phase: 'generating',
+      snapshot: legacySnapshot,
+      baselineAssistantCount: 3,
+      generationObserved: true,
+      legacyCompletionRecoveryEligible: true,
+    })).toEqual({ action: 'wait_for_stability' });
+
+    expect(evaluateRuntime({
+      phase: 'generating',
+      snapshot: legacySnapshot,
+      baselineAssistantCount: 3,
+      generationObserved: true,
+      legacyCompletionRecoveryEligible: false,
+    })).toEqual({ action: 'wait' });
   });
 
 });

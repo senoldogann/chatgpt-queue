@@ -36,6 +36,7 @@ let currentKey = conversationKeyFromUrl(location.href, temporaryKey);
 let ownsCurrent = false;
 let localNotice: string | undefined;
 let stableTimer: number | undefined;
+let lastDomMutationAt = Date.now();
 let evaluationTail: Promise<void> = Promise.resolve();
 let selectedWorkflow: WorkflowDefinition | undefined;
 let workflowRun: WorkflowRun | undefined;
@@ -230,8 +231,11 @@ const bridgeContentController = new BridgeContentController({
     return flowRunController.run(workflow, inputs, context);
   },
   publish: async (jobId, update) => {
-    await client.request({ type: 'bridgeJobUpdate', jobId, ...update });
+    // Refresh the registration before reporting: a restarted service worker starts with an empty
+    // target registry, and a job accepted before owner tabs were persisted can only be bound to
+    // the tab that owns its target.
     await registerBridgeTarget().catch(() => undefined);
+    await client.request({ type: 'bridgeJobUpdate', jobId, ...update });
   },
 });
 
@@ -246,7 +250,11 @@ chrome.runtime.onMessage.addListener((message: BridgeRunMessage, _sender, sendRe
     sendResponse({ ok: false, error: 'bridge-invalid-run' });
     return false;
   }
-  void bridgeContentController.accept({ jobId: message.jobId, workflow: validated.value, inputs: { ...message.inputs } });
+  void bridgeContentController.accept({ jobId: message.jobId, workflow: validated.value, inputs: { ...message.inputs } })
+    .catch(async (error: unknown) => {
+      localNotice = `Bridge job failed: ${error instanceof Error ? error.message : String(error)}`;
+      await render().catch(() => undefined);
+    });
   sendResponse({ ok: true });
   return false;
 });
@@ -341,6 +349,10 @@ const armStableEvaluation = (): void => {
   }, STABLE_WINDOW_MS);
 };
 
+// Quiescence is measured rather than only inferred from a timer: a hidden tab's timers are
+// throttled and page mutations can clear the stable window indefinitely.
+const domQuietFor = (): number => Date.now() - lastDomMutationAt;
+
 function scheduleEvaluation(domStable: boolean): void {
   evaluationTail = evaluationTail
     .then(async () => {
@@ -361,6 +373,7 @@ function scheduleEvaluation(domStable: boolean): void {
 }
 
 const observer = new MutationObserver(() => {
+  lastDomMutationAt = Date.now();
   void (async () => {
     await syncIdentity();
     if (await recoverDomUnrecognizedIfSafe()) return;
@@ -379,15 +392,18 @@ chrome.storage.onChanged.addListener((_changes, areaName) => {
 
 window.setInterval(() => {
   void registerBridgeTarget().catch(() => undefined);
-  if (!ownsCurrent) return;
-  void client.get(currentKey).then((queue) => {
-    if (queue?.status === 'running' || queue?.status === 'paused') {
-      return client.request({ type: 'heartbeat', key: currentKey });
-    }
-    return undefined;
-  }).catch(() => {
-    ownsCurrent = false;
-  });
+  void (async () => {
+    const queue = await client.get(currentKey);
+    if (!queue || (queue.status !== 'running' && queue.status !== 'paused')) return;
+    // A hidden tab can lapse its lease (Chrome throttles background timers to roughly one
+    // wake-up per minute) or miss DOM signals entirely, and a single failed heartbeat used
+    // to disable this tab permanently. Re-acquiring the lease and re-evaluating here keeps an
+    // unattended queue moving; ownership stays exclusive, so a live lease held by another tab
+    // still wins and this tab only reports the conflict.
+    if (!ownsCurrent && !await claimCurrent()) return;
+    await client.request({ type: 'heartbeat', key: currentKey });
+    scheduleEvaluation(domQuietFor() >= STABLE_WINDOW_MS);
+  })().catch(() => undefined);
 }, HEARTBEAT_MS);
 
 void attachExistingQueue().then(async () => {

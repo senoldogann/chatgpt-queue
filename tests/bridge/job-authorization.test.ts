@@ -31,4 +31,9 @@ describe('bridge job ownership', () => {
     expect(() => decideBridgeJobOwnership(record(), 9)).toThrow('bridge-target-owner-mismatch');
     expect(() => decideBridgeJobOwnership(record(), 9, 10)).toThrow('bridge-target-owner-mismatch');
   });
+
+  it('binds a legacy record to the tab that registered its target when no queue lease is held', () => {
+    expect(decideBridgeJobOwnership(record(), 9, undefined, 9)).toEqual({ kind: 'bind-owner', ownerTabId: 9 });
+    expect(() => decideBridgeJobOwnership(record(), 9, undefined, 10)).toThrow('bridge-target-owner-mismatch');
+  });
 });

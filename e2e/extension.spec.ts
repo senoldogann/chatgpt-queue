@@ -451,6 +451,61 @@ test('reconciles a persisted paused running item when the page already shows its
   await expect(queueRoot(page)).not.toContainText('Running');
 });
 
+test('reconciles a legacy generating item without copy action and continues the queue', async ({ extensionContext, extensionWorker }) => {
+  await extensionWorker.evaluate(async ({ storageKey, queueKey }) => {
+    const now = Date.now();
+    await chrome.storage.local.set({
+      [storageKey]: {
+        version: 1,
+        queues: {
+          [queueKey]: {
+            version: 1,
+            id: 'seed-legacy-generating',
+            conversationKey: queueKey,
+            status: 'running',
+            items: [
+              {
+                id: 'seed-running',
+                content: 'already sent',
+                state: 'running',
+                dispatchToken: 'seed-dispatch',
+                createdAt: now - 70_000,
+                updatedAt: now - 60_000,
+                startedAt: now - 60_000,
+              },
+              {
+                id: 'seed-next',
+                content: 'legacy-next-message',
+                state: 'queued',
+                createdAt: now - 50_000,
+                updatedAt: now - 50_000,
+              },
+            ],
+            runtime: {
+              phase: 'generating',
+              activeItemId: 'seed-running',
+              baselineAssistantCount: 1,
+              generationObserved: true,
+            },
+            createdAt: now - 70_000,
+            updatedAt: now - 60_000,
+          },
+        },
+      },
+    });
+  }, { storageKey: STORAGE_KEY, queueKey: 'conv:legacy-generating' });
+
+  const page = await openFixture(extensionContext, '/c/legacy-generating?seed-completed-no-copy=1');
+  await expect.poll(async () => (await sentEvents(page, 'legacy-generating')).length, { timeout: 10_000 }).toBe(1);
+  expect((await sentEvents(page, 'legacy-generating')).map((event) => event.content)).toEqual(['legacy-next-message']);
+  const afterRecovery = await storedQueue(extensionWorker, 'conv:legacy-generating');
+  expect(afterRecovery.items[0]?.state).toBe('completed');
+  expect(afterRecovery.items[1]?.state).toBe('running');
+
+  await page.locator('#fixture-complete').click();
+  await expect.poll(async () => (await storedQueue(extensionWorker, 'conv:legacy-generating'))?.status).toBe('completed');
+});
+
 test('continues when the stop control is missed but the completed assistant turn is visible', async ({ extensionContext, extensionWorker }) => {
   const page = await openFixture(extensionContext, '/c/missed-stop?omit-stop=1');
   await addMessage(page, 'background-first');
@@ -630,4 +685,22 @@ test('recovers an unresolved send after the MV3 service worker is stopped and re
   await expect(queueRoot(page)).toBeAttached();
   await expect(queueRoot(page)).toContainText('Blocked: uncertain-send');
   expect(await sentEvents(page, 'worker-restart')).toHaveLength(1);
+});
+
+test('keeps draining a queue while the page never becomes quiescent', async ({ extensionContext, extensionWorker }) => {
+  test.setTimeout(60_000);
+  const page = await openFixture(extensionContext, '/c/noisy-completion?noisy=1', 'noisy');
+  await addMessage(page, 'noisy-first');
+  await addMessage(page, 'noisy-second');
+  await startQueue(page);
+  await expect.poll(async () => (await sentEvents(page, 'noisy-completion')).length).toBe(1);
+
+  // The response finishes, but unrelated page mutations keep clearing the quiet window.
+  await page.locator('#fixture-complete').click();
+
+  await expect.poll(async () => (await sentEvents(page, 'noisy-completion')).length, { timeout: 20_000 }).toBe(2);
+  expect((await sentEvents(page, 'noisy-completion')).map((event) => event.content)).toEqual(['noisy-first', 'noisy-second']);
+  await page.locator('#fixture-complete').click();
+  await expect.poll(async () => (await storedQueue(extensionWorker, 'conv:noisy-completion'))?.status, { timeout: 20_000 }).toBe('completed');
+  expect((await storedQueue(extensionWorker, 'conv:noisy-completion')).items.map((item: any) => item.state)).toEqual(['completed', 'completed']);
 });

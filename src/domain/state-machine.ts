@@ -6,7 +6,22 @@ export interface RuntimeEvaluationInput {
   baselineAssistantCount: number;
   baselineAssistantTurnKey?: string;
   generationObserved: boolean;
+  completionWaitMs?: number;
+  legacyCompletionRecoveryEligible?: boolean;
 }
+
+/**
+ * Upper bound on how long a provable-but-unconfirmed completion may wait for a
+ * quiescent DOM.
+ *
+ * ChatGPT pages keep mutating for reasons unrelated to the active response
+ * (streaming marks, animations, background re-renders), and Chrome throttles
+ * page timers in hidden tabs to roughly one wake-up per minute. The quiet
+ * window can therefore stay unobserved forever while completion evidence is
+ * already conclusive. Completion evidence stays the primary signal; the quiet
+ * window is a secondary confirmation with a bounded wait.
+ */
+export const COMPLETION_QUIET_GRACE_MS = 5_000;
 
 const blockReason = (snapshot: PageSnapshot): string | null => {
   if (!snapshot.domRecognized && snapshot.domStable) return 'dom-unrecognized';
@@ -15,7 +30,15 @@ const blockReason = (snapshot: PageSnapshot): string | null => {
 };
 
 export function evaluateRuntime(input: RuntimeEvaluationInput): RuntimeDecision {
-  const { phase, snapshot, baselineAssistantCount, baselineAssistantTurnKey, generationObserved } = input;
+  const {
+    phase,
+    snapshot,
+    baselineAssistantCount,
+    baselineAssistantTurnKey,
+    generationObserved,
+    completionWaitMs,
+    legacyCompletionRecoveryEligible = false,
+  } = input;
   const blocked = blockReason(snapshot);
   if (blocked) return { action: 'block', reason: blocked };
 
@@ -29,8 +52,8 @@ export function evaluateRuntime(input: RuntimeEvaluationInput): RuntimeDecision 
   const completionEvidence = generationObserved || snapshot.assistantCompletionControlPresent;
   const legacyCompletionTarget = !baselineAssistantTurnKey
     && generationObserved
-    && snapshot.assistantCompletionControlPresent
-    && pageReady;
+    && pageReady
+    && (snapshot.assistantCompletionControlPresent || legacyCompletionRecoveryEligible);
   const hasCompletionTarget = hasNewAssistant || legacyCompletionTarget;
 
   switch (phase) {
@@ -56,10 +79,12 @@ export function evaluateRuntime(input: RuntimeEvaluationInput): RuntimeDecision 
       if (completionEvidence && hasCompletionTarget && pageReady) return { action: 'wait_for_stability' };
       return { action: 'wait' };
 
-    case 'waiting_stable_completion':
+    case 'waiting_stable_completion': {
       if (snapshot.isGenerating) return { action: 'generation_started', controlObserved: true };
-      if (completionEvidence && hasCompletionTarget && pageReady && snapshot.domStable) return { action: 'complete' };
+      const quiet = snapshot.domStable || (completionWaitMs ?? 0) >= COMPLETION_QUIET_GRACE_MS;
+      if (completionEvidence && hasCompletionTarget && pageReady && quiet) return { action: 'complete' };
       return { action: 'wait' };
+    }
 
     default:
       return { action: 'wait' };

@@ -33,6 +33,40 @@ describe('queue coordinator', () => {
     expect(await coordinator.claim('conv:a', 2)).toMatchObject({ kind: 'acquired' });
   });
 
+  it('renews a lapsed lease for the owning tab so a throttled background tab keeps driving', async () => {
+    const { coordinator, setNow } = setup();
+    await coordinator.ensureQueue('conv:a');
+    await coordinator.claim('conv:a', 1);
+
+    setNow(1500);
+    const renewed = await coordinator.heartbeat('conv:a', 1);
+    expect(renewed.owner).toMatchObject({ tabId: 1, heartbeatAt: 1500, expiresAt: 1600 });
+
+    await expect(coordinator.heartbeat('conv:a', 2)).rejects.toThrow('conversation-owner-mismatch');
+  });
+
+  it('records when completion started waiting for a quiet DOM and keeps it stable', async () => {
+    const { coordinator, setNow } = setup();
+    await coordinator.ensureQueue('conv:a');
+    await coordinator.add('conv:a', ['one']);
+    await coordinator.claim('conv:a', 1);
+    await coordinator.start('conv:a', 1);
+    const reservation = await coordinator.reserveNext('conv:a', 1, 1);
+    await coordinator.ackSent('conv:a', 1, reservation!.itemId, reservation!.dispatchToken);
+    await coordinator.markGenerationStarted('conv:a', 1, reservation!.itemId, reservation!.dispatchToken);
+
+    setNow(2000);
+    const waiting = await coordinator.markWaitingForStability('conv:a', 1, reservation!.itemId, reservation!.dispatchToken);
+    expect(waiting.runtime).toMatchObject({ phase: 'waiting_stable_completion', stableWaitStartedAt: 2000 });
+
+    setNow(3000);
+    const repeated = await coordinator.markWaitingForStability('conv:a', 1, reservation!.itemId, reservation!.dispatchToken);
+    expect(repeated.runtime.stableWaitStartedAt).toBe(2000);
+
+    const generating = await coordinator.markGenerationStarted('conv:a', 1, reservation!.itemId, reservation!.dispatchToken);
+    expect(generating.runtime.stableWaitStartedAt).toBeUndefined();
+  });
+
   it('reserves a queued item exactly once before DOM send', async () => {
     const { coordinator } = setup();
     await coordinator.ensureQueue('conv:a');

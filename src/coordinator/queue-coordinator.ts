@@ -59,7 +59,14 @@ export class QueueCoordinator {
 
   private requireOwner(queue: ConversationQueue, tabId: number): void {
     const owner = queue.owner;
-    if (!owner || owner.tabId !== tabId || owner.expiresAt <= this.now()) throw new OwnershipError();
+    if (!owner || owner.tabId !== tabId) throw new OwnershipError();
+    // The lease timer bounds how long *another* tab waits before taking over a
+    // conversation whose driver stopped heartbeating (`claim` enforces that). It must not
+    // invalidate the owning tab's own work: Chrome throttles timers in hidden tabs to about
+    // one wake-up per minute and a suspend/resume skips them entirely, so a live owner can
+    // legitimately look expired while it is still the only tab driving this conversation.
+    // A tab proves its own liveness by calling in with its tab id; a foreign tab still has to
+    // claim the record, which only succeeds once the lease has actually lapsed.
   }
 
   async get(key: string): Promise<ConversationQueue | undefined> {
@@ -250,10 +257,17 @@ export class QueueCoordinator {
       this.requireOwner(queue, tabId);
       const item = queue.items.find((candidate) => candidate.id === itemId);
       if (!item || item.dispatchToken !== dispatchToken || item.state !== 'running') throw new Error('active-dispatch-mismatch');
+      const now = this.now();
+      const runtime = { ...queue.runtime, phase, generationObserved: true };
+      if (phase === 'waiting_stable_completion') {
+        runtime.stableWaitStartedAt = queue.runtime.stableWaitStartedAt ?? now;
+      } else {
+        delete runtime.stableWaitStartedAt;
+      }
       const updated: ConversationQueue = {
         ...queue,
-        runtime: { ...queue.runtime, phase, generationObserved: true },
-        updatedAt: this.now(),
+        runtime,
+        updatedAt: now,
       };
       await this.repo.put(updated);
       return updated;

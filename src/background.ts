@@ -66,8 +66,10 @@ const handleBridgeRequest = async (request: BridgeControlRequest, tabId: number)
     case 'bridgeJobUpdate': {
       let record = await bridgeRepository.get(request.jobId);
       if (!record) throw new Error('bridge-job-not-found');
-      const queue = record.ownerTabId === undefined ? await coordinator.get(record.conversationKey) : undefined;
-      const ownership = decideBridgeJobOwnership(record, tabId, queue?.owner?.tabId);
+      const legacyJob = record.ownerTabId === undefined;
+      const queue = legacyJob ? await coordinator.get(record.conversationKey) : undefined;
+      const targetTabId = legacyJob ? targetRegistry.resolve(record.targetId)?.tabId : undefined;
+      const ownership = decideBridgeJobOwnership(record, tabId, queue?.owner?.tabId, targetTabId);
       if (ownership.kind === 'bind-owner') {
         record = await bridgeRepository.bindOwner(request.jobId, ownership.ownerTabId);
       }
