@@ -146,12 +146,15 @@ const assistantState = (document: Document): { count: number; completionControlP
   return { count: messages.length, completionControlPresent: Boolean(completionControl && !isDisabled(completionControl)) };
 };
 
-const assistantTurnKey = (turn: HTMLElement, message: HTMLElement, index: number): string =>
-  turn.getAttribute('data-turn-id')
-  ?? message.getAttribute('data-message-id')
-  ?? turn.getAttribute('data-testid')
-  ?? turn.id
-  ?? `assistant:${index}`;
+const assistantTurnKey = (turn: HTMLElement, message: HTMLElement, index: number): string => {
+  const candidate = [
+    turn.getAttribute('data-turn-id'),
+    message.getAttribute('data-message-id'),
+    turn.getAttribute('data-testid'),
+    turn.id,
+  ].find((value): value is string => Boolean(value?.trim()));
+  return candidate ?? `assistant:${index}`;
+};
 
 const assistantText = (message: HTMLElement): string => {
   const clone = message.cloneNode(true) as HTMLElement;

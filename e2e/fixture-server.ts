@@ -42,6 +42,8 @@ const pageHtml = `<!doctype html>
       const delayedStopMs = Number(params.get('delayed-stop-ms') ?? '0');
       const omitStop = params.get('omit-stop') === '1';
       const autoCompleteMs = Number(params.get('auto-complete-ms') ?? '0');
+      const responseTexts = params.getAll('response');
+      const deliveryTimeoutMode = params.get('delivery-timeout') === '1';
       const storageKey = 'fixture-sends:' + conversationId;
       const composer = document.getElementById('prompt-textarea');
       let send = document.querySelector('[data-testid="send-button"]');
@@ -88,15 +90,16 @@ const pageHtml = `<!doctype html>
       const completeGeneration = () => {
         document.querySelector('[data-testid="stop-button"], button[aria-label="Stop generating"]')?.remove();
         responseCount += 1;
+        const responseText = responseTexts[responseCount - 1] ?? ('assistant response ' + responseCount);
         const existingResponse = messages.querySelector('[data-message-author-role="assistant"]:last-child');
         let completedResponse;
         if (existingResponse) {
-          existingResponse.textContent = 'assistant response ' + responseCount;
+          existingResponse.textContent = responseText;
           completedResponse = existingResponse;
         } else {
           const response = document.createElement('article');
           response.dataset.messageAuthorRole = 'assistant';
-          response.textContent = 'assistant response ' + responseCount;
+          response.textContent = responseText;
           messages.append(response);
           completedResponse = response;
         }
@@ -133,6 +136,14 @@ const pageHtml = `<!doctype html>
           return;
         }
         beginGeneration();
+        if (deliveryTimeoutMode) {
+          window.setTimeout(() => {
+            const alert = document.createElement('div');
+            alert.setAttribute('role', 'alert');
+            alert.textContent = 'Message delivery timed out. Please try again.';
+            document.body.append(alert);
+          }, 0);
+        }
         if (autoCompleteMs > 0) window.setTimeout(completeGeneration, autoCompleteMs);
         if (routeOnSend && location.pathname === '/new') {
           history.pushState({}, '', '/c/' + routeOnSend);
