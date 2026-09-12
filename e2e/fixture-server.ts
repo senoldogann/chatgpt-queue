@@ -37,6 +37,7 @@ const pageHtml = `<!doctype html>
       const tabName = params.get('tab') ?? 'default';
       const authenticatedMode = params.get('authenticated') === '1';
       const transientGapMode = params.get('transient-gap') === '1';
+      const transientGapMs = Number(params.get('transient-gap-ms') ?? (transientGapMode ? '100' : '0'));
       const routeOnSend = params.get('route-on-send');
       const routeChainFinal = params.get('route-chain-final');
       const delayedStopMs = Number(params.get('delayed-stop-ms') ?? '0');
@@ -131,9 +132,9 @@ const pageHtml = `<!doctype html>
           if (!composer.isConnected) document.getElementById('chat').append(composer);
         };
 
-        if (transientGapMode) {
+        if (transientGapMs > 0) {
           composer.remove();
-          window.setTimeout(restoreComposer, 100);
+          window.setTimeout(restoreComposer, transientGapMs);
         } else {
           restoreComposer();
         }

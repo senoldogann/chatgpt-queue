@@ -128,6 +128,26 @@ describe('queue coordinator', () => {
     expect(next?.content).toBe('two');
   });
 
+  it('preserves the active lifecycle phase across a recoverable block and resume', async () => {
+    const { coordinator } = setup();
+    await coordinator.ensureQueue('conv:a');
+    await coordinator.add('conv:a', ['one']);
+    await coordinator.claim('conv:a', 1);
+    await coordinator.start('conv:a', 1);
+    const reservation = await coordinator.reserveNext('conv:a', 1, 1);
+    await coordinator.ackSent('conv:a', 1, reservation!.itemId, reservation!.dispatchToken);
+    await coordinator.markGenerationStarted('conv:a', 1, reservation!.itemId, reservation!.dispatchToken);
+
+    const blocked = await coordinator.block('conv:a', 1, 'dom-unrecognized');
+    expect(blocked.status).toBe('blocked');
+    expect(blocked.runtime.phase).toBe('generating');
+
+    const resumed = await coordinator.start('conv:a', 1);
+    expect(resumed.status).toBe('running');
+    expect(resumed.runtime.phase).toBe('generating');
+    expect(resumed.blockedReason).toBeUndefined();
+  });
+
   it('isolates conversation mutations', async () => {
     const { coordinator } = setup();
     await coordinator.ensureQueue('conv:a');

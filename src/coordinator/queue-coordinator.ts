@@ -147,10 +147,22 @@ export class QueueCoordinator {
       const queue = await this.requiredQueue(key);
       this.requireOwner(queue, tabId);
       if (!getNextQueuedItem(queue) && !queue.items.some((item) => item.state === 'running')) return queue;
+      const active = queue.runtime.activeItemId
+        ? queue.items.find((item) => item.id === queue.runtime.activeItemId)
+        : undefined;
+      const resumedRuntime = queue.runtime.phase === 'blocked'
+        ? active?.state === 'sending'
+          ? { ...queue.runtime, phase: 'sending' as const }
+          : active?.state === 'running'
+            ? { ...queue.runtime, phase: 'generating' as const }
+            : { phase: 'ready_to_send' as const }
+        : queue.runtime.activeItemId
+          ? queue.runtime
+          : { phase: 'ready_to_send' as const };
       const updated: ConversationQueue = {
         ...queue,
         status: 'running',
-        runtime: queue.runtime.activeItemId ? queue.runtime : { phase: 'ready_to_send' },
+        runtime: resumedRuntime,
         updatedAt: this.now(),
       };
       delete updated.blockedReason;
@@ -292,7 +304,7 @@ export class QueueCoordinator {
       const updated: ConversationQueue = {
         ...queue,
         status: 'blocked',
-        runtime: { ...queue.runtime, phase: 'blocked' },
+        runtime: { ...queue.runtime },
         blockedReason: reason,
         updatedAt: this.now(),
       };
