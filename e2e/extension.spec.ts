@@ -313,6 +313,28 @@ test('refresh recovers an unresolved sending item as uncertain-send without rese
   expect((await storedQueue(extensionWorker, 'conv:refresh')).blockedReason).toBe('uncertain-send');
 });
 
+test('continues when the stop control is missed but the completed assistant turn is visible', async ({ extensionContext, extensionWorker }) => {
+  const page = await openFixture(extensionContext, '/c/missed-stop?omit-stop=1');
+  await addMessage(page, 'background-first');
+  await addMessage(page, 'background-second');
+  await startQueue(page);
+
+  await expect.poll(async () => (await sentEvents(page, 'missed-stop')).length).toBe(1);
+  await expect.poll(async () => (await storedQueue(extensionWorker, 'conv:missed-stop'))?.runtime?.phase).toBe('generating');
+  expect((await storedQueue(extensionWorker, 'conv:missed-stop')).runtime.generationObserved).toBe(false);
+
+  await page.locator('#fixture-complete').click();
+  await expect.poll(async () => (await sentEvents(page, 'missed-stop')).length).toBe(2);
+  expect((await sentEvents(page, 'missed-stop')).map((event) => event.content)).toEqual(['background-first', 'background-second']);
+  const afterFirst = await storedQueue(extensionWorker, 'conv:missed-stop');
+  expect(afterFirst.status).toBe('running');
+  expect(afterFirst.blockedReason).toBeUndefined();
+  expect(afterFirst.items[0]?.state).toBe('completed');
+
+  await page.locator('#fixture-complete').click();
+  await expect.poll(async () => (await storedQueue(extensionWorker, 'conv:missed-stop'))?.status).toBe('completed');
+});
+
 test('does not reserve the next item while generation control is delayed', async ({ extensionContext, extensionWorker }) => {
   const page = await openFixture(extensionContext, '/c/delayed-generation?authenticated=1&delayed-stop-ms=1400');
   await addMessage(page, 'delayed-first');
