@@ -136,7 +136,9 @@ test('compacts a near-limit conversation into a fresh chat and carries the queue
   // The source queue pauses, so the carried follow-ups are not spent on a conversation at its limit.
   await expect.poll(async () => (await storedQueue(extensionWorker, 'conv:handoff-source'))?.status).toBe('paused');
   await page.waitForTimeout(600);
-  expect(await sentEvents(page, 'handoff-source')).toHaveLength(1);
+  // Nothing else is sent into the source conversation: the queued follow-ups wait for the new chat.
+  expect((await sentEvents(page, 'handoff-source')).map((event) => event.content.slice(0, 30)))
+    .toEqual([expect.stringContaining('Produce a handoff brief')]);
 
   const newPagePromise = extensionContext.waitForEvent('page');
   await root.locator('[data-action="open-handoff"]').click();
