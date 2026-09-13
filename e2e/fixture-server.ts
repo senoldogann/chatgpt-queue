@@ -45,6 +45,7 @@ const pageHtml = `<!doctype html>
       const autoCompleteMs = Number(params.get('auto-complete-ms') ?? '0');
       const responseTexts = params.getAll('response');
       const deliveryTimeoutMode = params.get('delivery-timeout') === '1';
+      const unknownAlertMode = params.get('unknown-alert') === '1';
       const seedCompleted = params.get('seed-completed') === '1';
       const noisyMode = params.get('noisy') === '1';
       const seedCompletedNoCopy = params.get('seed-completed-no-copy') === '1';
@@ -164,6 +165,14 @@ const pageHtml = `<!doctype html>
             const alert = document.createElement('div');
             alert.setAttribute('role', 'alert');
             alert.textContent = 'Message delivery timed out. Please try again.';
+            document.body.append(alert);
+          }, 0);
+        }
+        if (unknownAlertMode) {
+          window.setTimeout(() => {
+            const alert = document.createElement('div');
+            alert.setAttribute('role', 'alert');
+            alert.textContent = 'Tool status updated successfully.';
             document.body.append(alert);
           }, 0);
         }

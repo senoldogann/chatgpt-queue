@@ -115,15 +115,16 @@ const relevantDiagnosticButtons = (document: Document): Element[] =>
   }).slice(0, 8);
 
 const detectBlockingReason = (document: Document): string | null => {
-  const candidates = [...document.querySelectorAll<HTMLElement>('[role="alert"], [data-testid*="error" i], [data-testid="conversation-turn-error"]')];
-  const text = candidates.map(normalizedText).join(' ');
+  const alerts = [...document.querySelectorAll<HTMLElement>('[role="alert"]')];
+  const dedicatedErrors = [...document.querySelectorAll<HTMLElement>('[data-testid*="error" i], [data-testid="conversation-turn-error"]')];
+  const text = [...alerts, ...dedicatedErrors].map(normalizedText).filter(Boolean).join(' ');
   if (!text) return null;
   if (/message delivery timed out|ileti.*zaman aşım|mesaj.*zaman aşım/.test(text)) return 'message-delivery-timeout';
   if (/too many requests|rate limit|rate-limit|çok fazla istek/.test(text)) return 'rate-limit';
   if (/network error|connection error|ağ hatası|bağlantı hatası/.test(text)) return 'network-error';
   if (/session expired|sign in|log in|oturum.*sona er/.test(text)) return 'session-expired';
   if (/something went wrong|try again|yeniden dene|bir şeyler ters gitti/.test(text)) return 'chatgpt-error';
-  return 'blocking-error';
+  return dedicatedErrors.some((element) => Boolean(normalizedText(element))) ? 'blocking-error' : null;
 };
 
 const hasConfirmation = (document: Document): boolean => {

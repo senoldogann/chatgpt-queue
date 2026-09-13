@@ -86,6 +86,27 @@ describe('DOMChatGPTAdapter', () => {
     expect(adapter.getState(false).blockingReason).toBe('rate-limit');
   });
 
+  it('ignores unknown accessibility alerts that are not recognized ChatGPT errors', () => {
+    const adapter = render(`
+      <main>
+        <div id="prompt-textarea" contenteditable="true"></div>
+        <button data-testid="send-button">Send</button>
+        <div role="alert">Tool status updated successfully.</div>
+      </main>`);
+
+    expect(adapter.getState(false).blockingReason).toBeNull();
+  });
+
+  it('keeps dedicated ChatGPT error containers fail-closed when the error text is unknown', () => {
+    const adapter = render(`
+      <main>
+        <div id="prompt-textarea" contenteditable="true"></div>
+        <div data-testid="conversation-turn-error">Unexpected provider failure.</div>
+      </main>`);
+
+    expect(adapter.getState(false).blockingReason).toBe('blocking-error');
+  });
+
   it('detects confirmation UI as fail-closed', () => {
     const adapter = render(`
       <main>

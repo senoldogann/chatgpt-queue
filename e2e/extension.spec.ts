@@ -319,6 +319,78 @@ test('pause lets the active response finish but does not dispatch the next item 
   await expect.poll(async () => (await sentEvents(page, 'pause')).length).toBe(2);
 });
 
+test('ignores unknown accessibility alerts during generation and continues the queue', async ({ extensionContext, extensionWorker }) => {
+  const page = await openFixture(extensionContext, '/c/unknown-alert?unknown-alert=1');
+  await addMessage(page, 'alert-first');
+  await addMessage(page, 'alert-second');
+  await startQueue(page);
+
+  await expect.poll(async () => (await sentEvents(page, 'unknown-alert')).length).toBe(1);
+  await page.waitForTimeout(300);
+  const duringFirst = await storedQueue(extensionWorker, 'conv:unknown-alert');
+  expect(duringFirst.status).toBe('running');
+  expect(duringFirst.blockedReason).toBeUndefined();
+
+  await page.locator('#fixture-complete').click();
+  await expect.poll(async () => (await sentEvents(page, 'unknown-alert')).length).toBe(2);
+  expect((await sentEvents(page, 'unknown-alert')).map((event) => event.content)).toEqual(['alert-first', 'alert-second']);
+});
+
+test('recovers a persisted blocking-error after generation was observed and the DOM is healthy', async ({ extensionContext, extensionWorker }) => {
+  await extensionWorker.evaluate(async ({ storageKey, queueKey }) => {
+    const now = Date.now();
+    await chrome.storage.local.set({
+      [storageKey]: {
+        version: 1,
+        queues: {
+          [queueKey]: {
+            version: 1,
+            id: 'seed-blocking-error',
+            conversationKey: queueKey,
+            status: 'blocked',
+            blockedReason: 'blocking-error',
+            items: [
+              {
+                id: 'seed-running',
+                content: 'already sent',
+                state: 'running',
+                dispatchToken: 'seed-dispatch',
+                createdAt: now - 10_000,
+                updatedAt: now - 9_000,
+                startedAt: now - 9_000,
+              },
+              {
+                id: 'seed-next',
+                content: 'safe-next-message',
+                state: 'queued',
+                createdAt: now - 8_000,
+                updatedAt: now - 8_000,
+              },
+            ],
+            runtime: {
+              phase: 'generating',
+              activeItemId: 'seed-running',
+              baselineAssistantCount: 1,
+              baselineAssistantTurnKey: 'old-turn',
+              generationObserved: true,
+            },
+            createdAt: now - 10_000,
+            updatedAt: now - 9_000,
+          },
+        },
+      },
+    });
+  }, { storageKey: STORAGE_KEY, queueKey: 'conv:recover-blocking-error' });
+
+  const page = await openFixture(extensionContext, '/c/recover-blocking-error?seed-completed=1');
+  await expect.poll(async () => (await sentEvents(page, 'recover-blocking-error')).length, { timeout: 10_000 }).toBe(1);
+  expect((await sentEvents(page, 'recover-blocking-error'))[0]?.content).toBe('safe-next-message');
+  const recovered = await storedQueue(extensionWorker, 'conv:recover-blocking-error');
+  expect(recovered.blockedReason).toBeUndefined();
+  expect(recovered.items[0]?.state).toBe('completed');
+  expect(recovered.items[1]?.state).toBe('running');
+});
+
 for (const scenario of [
   { name: 'blocking error', control: '#fixture-error', reason: 'network-error' },
   { name: 'confirmation UI', control: '#fixture-confirmation', reason: 'confirmation-required' },
