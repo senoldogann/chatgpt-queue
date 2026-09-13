@@ -43,7 +43,7 @@ let workflowRun: WorkflowRun | undefined;
 let workflowError: string | undefined;
 let bridgeTargetId: string | undefined;
 let bridgeState: 'disabled' | 'enabling' | 'disconnected' | 'connected' = 'disconnected';
-let recoveringDomBlock = false;
+let recoveringTransientBlock = false;
 
 const shouldObserveLifecycle = (queue: ConversationQueue | undefined): boolean => {
   if (!queue) return false;
@@ -140,12 +140,33 @@ const syncIdentity = async (): Promise<void> => {
   await registerBridgeTarget().catch(() => undefined);
 };
 
-const recoverDomUnrecognizedIfSafe = async (queue?: ConversationQueue): Promise<boolean> => {
+const recoverTransientBlockIfSafe = async (queue?: ConversationQueue): Promise<boolean> => {
   const current = queue ?? await client.get(currentKey);
-  if (!current || current.status !== 'blocked' || current.blockedReason !== 'dom-unrecognized') return false;
-  if (!adapter.getState(false).domRecognized) return false;
-  if (recoveringDomBlock) return true;
-  recoveringDomBlock = true;
+  if (!current || current.status !== 'blocked') return false;
+
+  const snapshot = adapter.getState(false);
+  if (current.blockedReason === 'dom-unrecognized') {
+    if (!snapshot.domRecognized) return false;
+  } else if (current.blockedReason === 'blocking-error') {
+    const active = current.runtime.activeItemId
+      ? current.items.find((item) => item.id === current.runtime.activeItemId)
+      : undefined;
+    if (snapshot.blockingReason !== null
+      || active?.state !== 'running'
+      || current.runtime.generationObserved !== true) return false;
+
+    const baselineCount = current.runtime.baselineAssistantCount ?? 0;
+    const assistantAdvanced = current.runtime.baselineAssistantTurnKey !== undefined
+      ? snapshot.latestAssistantTurnKey !== undefined
+        && snapshot.latestAssistantTurnKey !== current.runtime.baselineAssistantTurnKey
+      : snapshot.assistantMessageCount > baselineCount;
+    if (!assistantAdvanced) return false;
+  } else {
+    return false;
+  }
+
+  if (recoveringTransientBlock) return true;
+  recoveringTransientBlock = true;
   try {
     if (!ownsCurrent && !await claimCurrent()) return false;
     await client.request({ type: 'start', key: currentKey });
@@ -153,14 +174,14 @@ const recoverDomUnrecognizedIfSafe = async (queue?: ConversationQueue): Promise<
     scheduleEvaluation(false);
     return true;
   } finally {
-    recoveringDomBlock = false;
+    recoveringTransientBlock = false;
   }
 };
 
 const attachExistingQueue = async (): Promise<void> => {
   const queue = await ensureCurrent();
-  if (queue.status === 'blocked' && queue.blockedReason === 'dom-unrecognized') {
-    if (await recoverDomUnrecognizedIfSafe(queue)) return;
+  if (queue.status === 'blocked') {
+    if (await recoverTransientBlockIfSafe(queue)) return;
   }
   if (queue.status !== 'running' && queue.status !== 'paused') {
     await render();
@@ -376,7 +397,7 @@ const observer = new MutationObserver(() => {
   lastDomMutationAt = Date.now();
   void (async () => {
     await syncIdentity();
-    if (await recoverDomUnrecognizedIfSafe()) return;
+    if (await recoverTransientBlockIfSafe()) return;
     armStableEvaluation();
     scheduleEvaluation(false);
   })().catch(() => undefined);
