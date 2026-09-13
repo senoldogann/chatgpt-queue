@@ -52,7 +52,9 @@ async function openFixture(context: BrowserContext, path: string): Promise<Page>
 }
 
 async function loadWorkflow(page: Page, workflow: unknown): Promise<void> {
-  await queueRoot(page).locator('[data-role="workflow-file"]').setInputFiles({
+  const root = queueRoot(page);
+  await root.locator('[data-tab="workflow"]').click();
+  await root.locator('[data-role="workflow-file"]').setInputFiles({
     name: 'test.flowrun.json',
     mimeType: 'application/json',
     buffer: Buffer.from(JSON.stringify(workflow)),
@@ -101,9 +103,15 @@ const handoffBrief = [
 test('reports the live adapter interface health and a local context estimate in the panel', async ({ extensionContext }) => {
   const page = await openFixture(extensionContext, '/c/interface-health');
   const root = queueRoot(page);
+  await root.locator('[data-tab="system"]').click();
 
   await expect(root.locator('[data-role="adapter-health"]')).toHaveText('interface ok');
   await expect(root.locator('[data-role="context-detail"]')).toContainText('(est.');
+  await expect(root.locator('.context-disclaimer')).toContainText('Visible-text estimate only');
+  const capacity = root.locator('[data-role="context-capacity"]');
+  await capacity.fill('200000');
+  await capacity.dispatchEvent('change');
+  await expect(root.locator('[data-role="context-detail"]')).toContainText('your override');
   await expect(root.locator('[data-action="prepare-handoff"]')).toBeEnabled();
 
   const detail = root.locator('[data-role="adapter-detail"]');
@@ -137,6 +145,10 @@ test('walks the built-in usage guide with visible progress and switches the pane
   // Switching the language re-renders the panel and persists the choice for every tab.
   await root.locator('[data-role="locale"]').selectOption('tr');
   await expect(root).toContainText('Sırada mesaj yok.');
+  await expect(root.locator('[data-tab="queue"]')).toHaveText('Sıra');
+  await expect(root.locator('[data-tab="workflow"]')).toHaveText('İş Akışı');
+  await expect(root.locator('[data-tab="system"]')).toHaveText('Sistem');
+  await expect(root.locator('[data-role="active-duration"]')).toHaveText(/Aktif süre \d{2}:\d{2}:\d{2}/);
   await expect(card).toContainText('Takip mesajı ekleyin');
   await expect.poll(async () => extensionWorker.evaluate(async () => {
     const data = await chrome.storage.local.get('chatgptQueueUiPreferences');
@@ -163,6 +175,7 @@ test('compacts a near-limit conversation into a fresh chat and carries the queue
   await root.locator('[data-action="add"]').click();
   await expect(root.locator('textarea[data-item-id]')).toHaveCount(2);
 
+  await root.locator('[data-tab="system"]').click();
   await root.locator('[data-action="prepare-handoff"]').click();
   await expect(root).toContainText('Preparing handoff brief');
 
@@ -202,17 +215,34 @@ test('compacts a near-limit conversation into a fresh chat and carries the queue
   expect(await sentEvents(newPage, 'temporary')).toHaveLength(0);
 });
 
-test('loads a built-in professional workflow preset without requiring a file', async ({ extensionContext }) => {
+test('loads a built-in workflow with clear required/optional input guidance in English and Turkish', async ({ extensionContext }) => {
   const page = await openFixture(extensionContext, '/c/preset-load');
   const root = queueRoot(page);
+  await root.locator('[data-tab="workflow"]').click();
 
-  await root.locator('[data-role="workflow-preset"]').selectOption('implementation-plan');
+  await root.locator('[data-role="workflow-preset"]').selectOption('code-review');
   await root.locator('[data-action="load-workflow-preset"]').click();
 
-  await expect(root).toContainText('implementation-plan');
+  await expect(root).toContainText('Code Review');
+  await expect(root).toContainText('code-review');
   await expect(root).toContainText('4 steps');
-  await expect(root.locator('[data-workflow-input="requirements"]')).toBeAttached();
+  await expect(root.locator('[data-workflow-input="diff"]')).toBeAttached();
+  await expect(root.locator('[data-workflow-input="diff"]')).toHaveAttribute('required', '');
   await expect(root.locator('[data-workflow-input="context"]')).toBeAttached();
+  await expect(root).toContainText('Required');
+  await expect(root).toContainText('Optional');
+  await expect(root).toContainText('git diff');
+  await expect(root).toContainText('repository or module constraints');
+
+  await root.locator('[data-role="locale"]').selectOption('tr');
+  await expect(root).toContainText('Kod İncelemesi');
+  await expect(root).toContainText('Değişiklik / diff');
+  await expect(root).toContainText('Zorunlu');
+  await expect(root).toContainText('Ek bağlam');
+  await expect(root).toContainText('İsteğe bağlı');
+
+  await root.locator('[data-role="locale"]').selectOption('auto');
+  await expect(root).toContainText('Code Review');
 });
 
 test('runs a live two-step workflow and chains the captured assistant output', async ({ extensionContext, extensionWorker }) => {

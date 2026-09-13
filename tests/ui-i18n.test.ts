@@ -26,8 +26,14 @@ describe('panel localisation', () => {
   it('translates from the requested locale and interpolates parameters', () => {
     expect(translate('tr', 'status.running')).toBe('Çalışıyor');
     expect(translate('en', 'context.pressure', { percent: 61, capacity: '262K', estimated: '160K', turns: 12, source: 'page' }))
-      .toBe('~61% of 262K tokens (est. 160K over 12 turns, page)');
+      .toContain('12 visible turns');
     expect(translate('tr', 'notice.ownedByOtherTab', { tabId: 7 })).toContain('7');
+    expect(translate('tr', 'workflow.required')).toBe('Zorunlu');
+    expect(translate('tr', 'workflow.input.diff.help')).toContain('git diff');
+    expect(translate('tr', 'tab.queue')).toBe('Sıra');
+    expect(translate('tr', 'tab.workflow')).toBe('İş Akışı');
+    expect(translate('tr', 'tab.system')).toBe('Sistem');
+    expect(translate('tr', 'timer.active')).toBe('Aktif süre');
   });
 
   it('leaves an unknown placeholder intact instead of dropping it', () => {

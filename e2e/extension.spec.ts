@@ -116,6 +116,51 @@ test('loads the unpacked MV3 extension and injects the queue UI', async ({ exten
   expect(queue.items[0].state).toBe('queued');
 });
 
+test('collapses every queued follow-up at once and exposes Expand plus Delete without losing drafts', async ({ extensionContext }) => {
+  const page = await openFixture(extensionContext, '/c/collapse-followups');
+  await addMessage(page, 'collapse one');
+  await addMessage(page, 'collapse two');
+  await addMessage(page, 'collapse three');
+  const root = queueRoot(page);
+  const firstRow = root.locator('.item.queued').first();
+  const firstDraft = firstRow.locator('textarea[data-item-id]');
+
+  await firstDraft.fill('edited but not saved');
+  await root.locator('[data-action="toggle-all-items"]').click();
+  await expect(root.locator('.item.queued.item-collapsed')).toHaveCount(3);
+  await expect(root.locator('[data-action="toggle-all-items"]')).toHaveText('Expand');
+  await expect(firstRow.locator('.queued-preview')).toHaveText('edited but not saved');
+  await expect(firstRow.locator('[data-action="toggle-item"]')).toHaveText('Expand');
+  await expect(firstRow.locator('[data-action="delete"]')).toBeVisible();
+
+  await root.locator('.item.queued').nth(2).locator('[data-action="delete"]').click();
+  await expect(root.locator('.item.queued')).toHaveCount(2);
+
+  await root.locator('[data-action="toggle-all-items"]').click();
+  await expect(root.locator('.item.queued.item-collapsed')).toHaveCount(0);
+  await expect(firstDraft).toHaveValue('edited but not saved');
+});
+
+test('shows the command-center tabs and formatted total active time', async ({ extensionContext }) => {
+  const page = await openFixture(extensionContext, '/c/command-center');
+  const root = queueRoot(page);
+
+  await expect(root.locator('[role="tablist"]')).toBeVisible();
+  await expect(root.locator('[data-tab="queue"]')).toHaveAttribute('aria-selected', 'true');
+  await expect(root.locator('[data-role="active-duration"]')).toHaveText(/Active time \d{2}:\d{2}:\d{2}/);
+
+  await root.locator('[data-tab="workflow"]').click();
+  await expect(root.locator('[data-panel="workflow"]')).toBeVisible();
+  await expect(root.locator('[data-panel="queue"]')).toBeHidden();
+
+  await root.locator('[data-tab="system"]').click();
+  await expect(root.locator('[data-panel="system"]')).toBeVisible();
+  await expect(root.locator('[data-role="context-capacity"]')).toBeVisible();
+
+  await root.locator('[data-tab="queue"]').click();
+  await expect(root.locator('[data-panel="queue"]')).toBeVisible();
+});
+
 test('sends through the authenticated composer when send appears only after input', async ({ extensionContext, extensionWorker }) => {
   const page = await openFixture(extensionContext, '/c/authenticated?authenticated=1');
   await expect(page.locator('button[aria-label="Send message"]')).toHaveCount(0);
