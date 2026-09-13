@@ -71,9 +71,27 @@ describe('NativeBridgeService', () => {
       now: () => 2_000,
     });
 
-    expect(await service.enable()).toBe(true);
+    expect(await service.enable()).toEqual({ enabled: true, state: 'disconnected', reloadRequired: false });
     expect(requestPermission).toHaveBeenCalledTimes(1);
     expect(connectNative).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a context reload requirement when nativeMessaging is granted before the API is bound', async () => {
+    const connectNative = vi.fn();
+    const service = new NativeBridgeService({
+      hasPermission: async () => true,
+      requestPermission: async () => true,
+      nativeApiAvailable: () => false,
+      connectNative,
+      repository: new BridgeJobRepository(new MemoryStorage()),
+      registry: new TargetRegistry(),
+      routeToTab: vi.fn(),
+      now: () => 2_000,
+    });
+
+    expect(await service.enable()).toEqual({ enabled: false, state: 'disconnected', reloadRequired: true });
+    expect(service.state()).toBe('disconnected');
+    expect(connectNative).not.toHaveBeenCalled();
   });
 
   it('does not report connected until the native host hello handshake completes', async () => {

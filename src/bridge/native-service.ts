@@ -10,11 +10,17 @@ export interface NativePortLike {
 }
 
 export type NativeBridgeState = 'disabled' | 'disconnected' | 'connected';
+export interface NativeBridgeEnableResult {
+  enabled: boolean;
+  state: NativeBridgeState;
+  reloadRequired: boolean;
+}
 
 export interface NativeBridgeServiceDependencies {
   hasPermission(): Promise<boolean>;
   requestPermission(): Promise<boolean>;
   connectNative(name: string): NativePortLike;
+  nativeApiAvailable?: () => boolean;
   repository: BridgeJobRepository;
   registry: TargetRegistry;
   routeToTab(tabId: number, message: unknown): Promise<unknown>;
@@ -61,6 +67,10 @@ export class NativeBridgeService {
       this.bridgeState = 'disabled';
       return false;
     }
+    if (this.deps.nativeApiAvailable?.() === false) {
+      this.bridgeState = 'disconnected';
+      return false;
+    }
     try {
       const port = this.deps.connectNative(NATIVE_HOST_NAME);
       this.port = port;
@@ -89,13 +99,18 @@ export class NativeBridgeService {
     }
   }
 
-  async enable(): Promise<boolean> {
+  async enable(): Promise<NativeBridgeEnableResult> {
     const granted = await this.deps.requestPermission();
     if (!granted) {
       this.bridgeState = 'disabled';
-      return false;
+      return { enabled: false, state: this.bridgeState, reloadRequired: false };
     }
-    return this.ensureConnected();
+    if (this.deps.nativeApiAvailable?.() === false) {
+      this.bridgeState = 'disconnected';
+      return { enabled: false, state: this.bridgeState, reloadRequired: true };
+    }
+    const enabled = await this.ensureConnected();
+    return { enabled, state: this.bridgeState, reloadRequired: false };
   }
 
   async handleHostMessage(raw: unknown): Promise<void> {
