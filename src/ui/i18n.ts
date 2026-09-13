@@ -25,6 +25,7 @@ const en = {
   'status.paused': 'Paused',
   'status.blocked': 'Blocked',
   'status.completed': 'Completed',
+  'status.stale': 'Disconnected',
 
   'action.start': 'Start queue',
   'action.pause': 'Pause',
@@ -76,6 +77,9 @@ const en = {
   'notice.invalidWorkflowJson': 'Invalid JSON: {message}',
   'notice.unknownWorkflowPreset': 'Unknown workflow preset: {presetId}',
   'notice.noWorkflowLoaded': 'No workflow loaded.',
+  'notice.staleTitle': 'Extension reloaded',
+  'notice.staleBody': 'This page is still running an older copy of the extension, so it can no longer read or write this conversation\u2019s queue. Reload this page to reconnect; the queue state is safe in local storage.',
+  'notice.driverStalled': 'The tab that was driving this queue stopped responding, so the queue cannot advance. Reload this page to take over and continue.',
 
   'workflow.title': 'Workflow',
   'workflow.subtitle': 'FlowRun',
@@ -185,6 +189,7 @@ const tr: Record<MessageKey, string> = {
   'status.paused': 'Duraklatıldı',
   'status.blocked': 'Engellendi',
   'status.completed': 'Tamamlandı',
+  'status.stale': 'Bağlantı kesildi',
 
   'action.start': 'Kuyruğu başlat',
   'action.pause': 'Duraklat',
@@ -236,6 +241,9 @@ const tr: Record<MessageKey, string> = {
   'notice.invalidWorkflowJson': 'Geçersiz JSON: {message}',
   'notice.unknownWorkflowPreset': 'Bilinmeyen iş akışı: {presetId}',
   'notice.noWorkflowLoaded': 'Yüklü bir iş akışı yok.',
+  'notice.staleTitle': 'Extension yeniden yüklendi',
+  'notice.staleBody': 'Bu sayfada extension\u2019ın eski bir kopyası çalışıyor ve artık bu sohbetin kuyruğunu okuyup yazamıyor. Yeniden bağlanmak için bu sayfayı yenileyin; kuyruk durumu yerel depolamada güvende.',
+  'notice.driverStalled': 'Bu kuyruğu yürüten sekme yanıt vermeyi bıraktı, bu yüzden kuyruk ilerleyemiyor. Devralıp sürdürmek için bu sayfayı yenileyin.',
 
   'workflow.title': 'İş akışı',
   'workflow.subtitle': 'FlowRun',

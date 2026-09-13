@@ -8,6 +8,7 @@ import { HandoffRepository, type HandoffRecord } from './context/handoff-reposit
 import { measureContextPressure, type ContextPressure } from './context/pressure';
 import { ContextSettingsRepository } from './context/settings';
 import type { ClaimResult } from './coordinator/queue-coordinator';
+import { isQueueDriverStalled } from './domain/staleness';
 import type { ConversationQueue } from './domain/types';
 import { FlowRunBrowserController } from './flowrun/browser-controller';
 import { QueueBackedFlowRunHost } from './flowrun/content-host';
@@ -21,13 +22,15 @@ import type { BridgeRunMessage } from './runtime/protocol';
 import { QueueRunner } from './runtime/queue-runner';
 import { chromeStorageArea } from './storage/queue-repository';
 import { createTranslator, resolveLocale, type Locale, type LocalePreference, type Translator } from './ui/i18n';
-import { QueuePanel, type QueuePanelContextView } from './ui/queue-panel';
+import { QueuePanel, type QueuePanelContextView, type QueuePanelView } from './ui/queue-panel';
 import { UiPreferencesRepository } from './ui/ui-preferences';
 
 const TEMP_SESSION_KEY = 'chatgpt-queue:temporary-key';
 const HANDOFF_IMPORT_SESSION_KEY = 'chatgpt-queue:handoff-imported';
 const STABLE_WINDOW_MS = 900;
 const HEARTBEAT_MS = 10_000;
+/** How often the panel checks that the extension it belongs to is still reachable. */
+const CONTEXT_WATCHDOG_MS = 3_000;
 const FLOWRUN_RECONCILE_MS = 500;
 /** The context estimate clones visible turns, so it refreshes on a budget rather than per render. */
 const CONTEXT_REFRESH_MS = 1_500;
@@ -65,6 +68,18 @@ let handoffPauseRequested = false;
 let pressureCache: ContextPressure | undefined;
 let pressureCacheAt = 0;
 let lastPassiveRenderAt = 0;
+/**
+ * Set once the extension context behind this content script is gone (the extension was reloaded,
+ * updated, or disabled). From that point on this script can neither read nor write the queue, so the
+ * panel must stop presenting itself as a live driver.
+ */
+let extensionStale = false;
+/**
+ * The last queue and view the panel was painted with. A stale script cannot read storage any more,
+ * but it can still repaint the DOM, which is what turns a frozen "Running" panel into an honest
+ * one that tells the user to reload.
+ */
+let lastPaint: { queue: ConversationQueue; notice: string | undefined; view: QueuePanelView } | undefined;
 const attemptedHandoffItems = new Set<string>();
 
 const handoffRepository = new HandoffRepository(chromeStorageArea());
@@ -120,7 +135,7 @@ const render = async (): Promise<ConversationQueue | undefined> => {
     const notice = queue.blockedReason === 'dom-unrecognized'
       ? t('notice.domDiagnostics', { summary: adapter.getDiagnosticSummary() })
       : localNotice;
-    panel.render(queue, notice, {
+    const view: QueuePanelView = {
       ...(selectedWorkflow === undefined ? {} : { workflow: selectedWorkflow }),
       ...(workflowRun === undefined ? {} : { run: workflowRun }),
       ...(workflowError === undefined ? {} : { error: workflowError }),
@@ -128,9 +143,53 @@ const render = async (): Promise<ConversationQueue | undefined> => {
       context: buildContextView(queue),
       locale,
       localePreference,
-    });
+      ...(extensionStale ? { stale: true } : {}),
+      ...(isQueueDriverStalled({ queue, now: Date.now() }) ? { driverStalled: true } : {}),
+    };
+    lastPaint = { queue, notice, view };
+    panel.render(queue, notice, view);
   }
   return queue;
+};
+
+/**
+ * Whether this content script can still talk to its extension. An orphaned script keeps running and
+ * keeps painting, but `chrome.runtime.id` is undefined once the extension behind it is replaced, so
+ * every read and write it attempts would fail.
+ */
+const extensionContextAlive = (): boolean => {
+  try {
+    return typeof chrome !== 'undefined' && Boolean(chrome.runtime?.id);
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Stops driving and repaints the last known queue with an explicit disconnected state.
+ *
+ * This is what prevents the failure mode where an orphaned panel keeps showing "Running" for a
+ * conversation nothing is advancing any more: the queue contents stay visible because they are the
+ * user's data, but the panel no longer pretends the extension can act on them.
+ */
+const detectLostExtensionContext = (): void => {
+  if (extensionStale || extensionContextAlive()) return;
+  extensionStale = true;
+  window.clearInterval(heartbeatTimer);
+  window.clearInterval(watchdogTimer);
+  observer.disconnect();
+  if (lastPaint && panel) {
+    panel.render(lastPaint.queue, lastPaint.notice, { ...lastPaint.view, stale: true, driverStalled: false });
+  }
+};
+
+const noteEvaluationFailure = (error: unknown): void => {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/extension context invalidated|receiving end does not exist|message port closed/i.test(message)) {
+    detectLostExtensionContext();
+    return;
+  }
+  localNotice = t('notice.pausedLocally', { message });
 };
 
 const ensureCurrent = async (): Promise<ConversationQueue> =>
@@ -631,6 +690,7 @@ const armStableEvaluation = (): void => {
 const domQuietFor = (): number => Date.now() - lastDomMutationAt;
 
 function scheduleEvaluation(domStable: boolean): void {
+  if (extensionStale) return;
   evaluationTail = evaluationTail
     .then(async () => {
       await syncIdentity();
@@ -654,13 +714,14 @@ function scheduleEvaluation(domStable: boolean): void {
       if (queue?.status === 'running' && queue.runtime.phase === 'ready_to_send_next') scheduleEvaluation(false);
     })
     .catch(async (error: unknown) => {
-      localNotice = t('notice.pausedLocally', { message: error instanceof Error ? error.message : String(error) });
+      noteEvaluationFailure(error);
       await render().catch(() => undefined);
     });
 }
 
 const observer = new MutationObserver(() => {
   lastDomMutationAt = Date.now();
+  if (extensionStale) return;
   void (async () => {
     await syncIdentity();
     if (await recoverTransientBlockIfSafe()) return;
@@ -671,13 +732,16 @@ const observer = new MutationObserver(() => {
 observer.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
 
 chrome.storage.onChanged.addListener((_changes, areaName) => {
-  if (areaName !== 'local') return;
+  if (areaName !== 'local' || extensionStale) return;
   void render().then((queue) => {
     if (ownsCurrent && shouldObserveLifecycle(queue)) scheduleEvaluation(false);
   }).catch(() => undefined);
 });
 
-window.setInterval(() => {
+const watchdogTimer = window.setInterval(detectLostExtensionContext, CONTEXT_WATCHDOG_MS);
+
+const heartbeatTimer = window.setInterval(() => {
+  if (extensionStale) return;
   void registerBridgeTarget().catch(() => undefined);
   void (async () => {
     const queue = await client.get(currentKey);

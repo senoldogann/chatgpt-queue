@@ -49,6 +49,13 @@ export interface QueuePanelView {
   context?: QueuePanelContextView;
   locale?: Locale;
   localePreference?: LocalePreference;
+  /**
+   * The content script can no longer reach the extension (it was reloaded or updated). Nothing in
+   * this panel can work until the page is reloaded, so it must not keep claiming the queue is live.
+   */
+  stale?: boolean;
+  /** The queue's owner lease lapsed while work was in flight: nobody is driving this queue. */
+  driverStalled?: boolean;
 }
 
 const PANEL_COLLAPSED_KEY = 'chatgpt-queue:panel-collapsed';
@@ -101,6 +108,9 @@ export class QueuePanel {
     this.lastRenderArgs = [queue, notice, view];
     const locale: Locale = view.locale ?? 'en';
     const t = createTranslator(locale);
+    // A stale panel is one whose content script has lost the extension. Every control it renders
+    // is already non-functional, so it must say so instead of reporting a queue as running.
+    const stale = view.stale === true;
     const signature = visualSignature(queue, notice, view, this.guideIndex);
     if (signature === this.lastVisualSignature) return;
 
@@ -174,6 +184,12 @@ export class QueuePanel {
       : '';
     const localNotice = notice
       ? `<div class="notice"><strong>${escapeHtml(t('notice.notice'))}:</strong> ${escapeHtml(notice)}</div>`
+      : '';
+    const staleBanner = stale
+      ? `<div class="notice danger-notice" data-role="stale-banner"><strong>${escapeHtml(t('notice.staleTitle'))}:</strong> ${escapeHtml(t('notice.staleBody'))}</div>`
+      : '';
+    const stalledNotice = !stale && view.driverStalled === true
+      ? `<div class="notice" data-role="driver-stalled">${escapeHtml(t('notice.driverStalled'))}</div>`
       : '';
 
     const workflow = view.workflow;
@@ -700,6 +716,16 @@ export class QueuePanel {
           border-radius: 10px;
           transition: box-shadow .18s ease;
         }
+        /* A stale panel keeps its queue list readable but removes every control that could no
+           longer work, so nothing invites a click that cannot do anything. */
+        .dock.stale .toolbar,
+        .dock.stale .composer,
+        .dock.stale .row-actions,
+        .dock.stale .workflow-section,
+        .dock.stale .bridge-row,
+        .dock.stale .handoff-row,
+        .dock.stale .capacity-row { display: none; }
+
         @media (max-width: 520px) {
           .dock { right: 8px; bottom: 8px; width: calc(100vw - 16px); }
           .body { max-height: 58vh; }
@@ -707,7 +733,7 @@ export class QueuePanel {
           .compact .item-state { grid-column: 2; }
         }
       </style>
-      <div class="dock${this.collapsed ? ' collapsed' : ''}">
+      <div class="dock${this.collapsed ? ' collapsed' : ''}${stale ? ' stale' : ''}">
         <section class="panel" aria-label="${escapeHtml(t('app.title'))}">
           <header class="header">
             <div class="title-group">
@@ -715,13 +741,15 @@ export class QueuePanel {
               <span class="count">${pending}</span>
             </div>
             <div class="header-actions">
-              <span class="status status-${escapeHtml(queue.status)}${isActive ? ' activity' : ''}">${isActive ? `<span class="activity-spinner" data-role="activity-spinner" aria-label="${escapeHtml(t('status.running'))}"></span>` : ''}${escapeHtml(t(`status.${queue.status}` as MessageKey))}</span>
+              <span class="status status-${stale ? 'stale' : escapeHtml(queue.status)}${isActive && !stale ? ' activity' : ''}">${isActive && !stale ? `<span class="activity-spinner" data-role="activity-spinner" aria-label="${escapeHtml(t('status.running'))}"></span>` : ''}${escapeHtml(stale ? t('status.stale') : t(`status.${queue.status}` as MessageKey))}</span>
               <button class="ghost icon" data-action="open-guide" aria-label="${escapeHtml(t('guide.open'))}" title="${escapeHtml(t('guide.open'))}">?</button>
               <select class="locale-select" data-role="locale" aria-label="${escapeHtml(t('locale.label'))}" title="${escapeHtml(t('locale.label'))}">${localeOptions}</select>
               <button class="ghost icon" data-action="hide" aria-label="${escapeHtml(t('app.hide'))}" title="${escapeHtml(t('app.hide'))}">→</button>
             </div>
           </header>
           <div class="body">
+            ${staleBanner}
+            ${stalledNotice}
             ${guideCard}
             <div class="toolbar">${control}<span class="spacer"></span></div>
             ${blocked}
@@ -1014,6 +1042,8 @@ const visualSignature = (
   bridgeState: view.bridgeState ?? 'disabled',
   locale: view.locale ?? 'en',
   localePreference: view.localePreference ?? 'auto',
+  stale: view.stale === true,
+  driverStalled: view.driverStalled === true,
   guideIndex,
   context: view.context ? {
     pressure: view.context.pressure
