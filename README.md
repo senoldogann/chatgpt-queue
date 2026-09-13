@@ -348,3 +348,19 @@ npm run package:release -- --tag v0.1.0-rc.4
 
 The packaging script is deterministic: it stages the built `dist/` files with a fixed timestamp, refuses to package a build whose manifest references a file that is not present, and writes the archive plus `<archive>.sha256` into the git-ignored `release/` directory.
 
+## Contributing
+
+Contributions are welcome, and they are reviewed against the project's fail-closed rules rather than against style preferences. `CONTRIBUTING.md` covers local setup, the level at which to add tests, and what a reviewable change looks like. In short: run `npm run verify` and the relevant E2E specs, keep the diff scoped, and document user-visible behavior in this README instead of a comment.
+
+Adding a panel language is a good first contribution: `src/ui/i18n.ts` is a single catalog file, and the types make a missing string a compile error rather than a silent fallback.
+
+## Security
+
+Report vulnerabilities privately through GitHub security advisories; see `SECURITY.md` for the threat model, the design properties that are intentional rather than bugs, and what is out of scope. The short version: this project has no backend, keeps everything in `chrome.storage.local`, never reads cookies or credentials, and asks for the smallest permission set it can.
+
+## License
+
+MIT — see `LICENSE`. You are free to use, modify, and redistribute this project, including commercially, as long as the copyright notice and license text are preserved.
+
+The built-in **Open Code Review** workflow is a prompt workflow derived from the methodology published by Alibaba's [Open Code Review](https://github.com/alibaba/open-code-review) (Apache-2.0). No code or binary from that project is included or redistributed here.
+

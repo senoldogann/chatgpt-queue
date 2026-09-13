@@ -1,6 +1,17 @@
 {
   "name": "chatgpt-queue",
   "version": "0.1.0",
+  "description": "Chrome/Edge MV3 extension that queues follow-up messages in a chatgpt.com conversation, plus an optional local FlowRun CLI bridge.",
+  "license": "MIT",
+  "author": "Senol Dogan <s.dogann@yandex.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/senoldogann/chatgpt-queue.git"
+  },
+  "homepage": "https://github.com/senoldogann/chatgpt-queue#readme",
+  "bugs": {
+    "url": "https://github.com/senoldogann/chatgpt-queue/issues"
+  },
   "private": true,
   "type": "module",
   "bin": {
