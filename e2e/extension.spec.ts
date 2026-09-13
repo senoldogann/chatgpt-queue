@@ -523,6 +523,49 @@ test('reconciles a persisted paused running item when the page already shows its
   await expect(queueRoot(page)).not.toContainText('Running');
 });
 
+test('reconciles a paused legacy item from agent-mode assistant turn markup', async ({ extensionContext, extensionWorker }) => {
+  await extensionWorker.evaluate(async ({ storageKey, queueKey }) => {
+    const now = Date.now();
+    await chrome.storage.local.set({
+      [storageKey]: {
+        version: 1,
+        queues: {
+          [queueKey]: {
+            version: 1,
+            id: 'seed-agent-paused',
+            conversationKey: queueKey,
+            status: 'paused',
+            items: [{
+              id: 'seed-agent-running',
+              content: 'already sent to agent mode',
+              state: 'running',
+              dispatchToken: 'seed-agent-dispatch',
+              createdAt: now - 70_000,
+              updatedAt: now - 60_000,
+              startedAt: now - 60_000,
+            }],
+            runtime: {
+              phase: 'generating',
+              activeItemId: 'seed-agent-running',
+              baselineAssistantCount: 0,
+              generationObserved: true,
+            },
+            createdAt: now - 70_000,
+            updatedAt: now - 60_000,
+          },
+        },
+      },
+    });
+  }, { storageKey: STORAGE_KEY, queueKey: 'conv:agent-mode-paused' });
+
+  const page = await openFixture(extensionContext, '/c/agent-mode-paused?seed-agent-completed=1');
+  await expect.poll(async () => (await storedQueue(extensionWorker, 'conv:agent-mode-paused'))?.status, { timeout: 10_000 }).toBe('completed');
+  const recovered = await storedQueue(extensionWorker, 'conv:agent-mode-paused');
+  expect(recovered.items[0]?.state).toBe('completed');
+  await expect(queueRoot(page)).toContainText('Completed');
+  await expect(queueRoot(page)).not.toContainText('Running');
+});
+
 test('reconciles a legacy generating item without copy action and continues the queue', async ({ extensionContext, extensionWorker }) => {
   await extensionWorker.evaluate(async ({ storageKey, queueKey }) => {
     const now = Date.now();

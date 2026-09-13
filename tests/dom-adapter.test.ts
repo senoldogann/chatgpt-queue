@@ -128,6 +128,42 @@ describe('DOMChatGPTAdapter', () => {
     expect(adapter.getState(true).assistantMessageCount).toBe(2);
   });
 
+  it('recognizes agent-mode assistant turns even when no message-author-role node exists', () => {
+    const adapter = render(`
+      <main>
+        <div id="prompt-textarea" contenteditable="true"></div>
+        <section data-turn="assistant" data-turn-id="agent-turn-1">
+          <div class="agent-output">Agent finished the task.</div>
+          <button data-testid="copy-turn-action-button">Copy response</button>
+        </section>
+      </main>`);
+
+    const state = adapter.getState(true);
+    expect(state.assistantMessageCount).toBe(1);
+    expect(state.latestAssistantTurnKey).toBe('agent-turn-1');
+    expect(state.assistantCompletionControlPresent).toBe(true);
+    expect(adapter.getLatestCompletedAssistantArtifact()).toEqual({
+      turnKey: 'agent-turn-1',
+      text: 'Agent finished the task.',
+    });
+  });
+
+  it('recognizes standalone agent-turn fallback markup', () => {
+    const adapter = render(`
+      <main>
+        <div id="prompt-textarea" contenteditable="true"></div>
+        <div class="agent-turn" id="agent-fallback">
+          <div>Fallback agent response.</div>
+          <button data-testid="copy-turn-action-button">Copy response</button>
+        </div>
+      </main>`);
+
+    const state = adapter.getState(true);
+    expect(state.assistantMessageCount).toBe(1);
+    expect(state.latestAssistantTurnKey).toBe('agent-fallback');
+    expect(state.assistantCompletionControlPresent).toBe(true);
+  });
+
   it('detects completion control only on the latest assistant turn', () => {
     const adapter = render(`
       <main>

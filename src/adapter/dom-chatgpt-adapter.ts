@@ -22,7 +22,16 @@ const COMPOSER_SELECTORS = [
   '[data-testid="prompt-textarea"]',
 ];
 
-const ASSISTANT_SELECTOR = '[data-message-author-role="assistant"]';
+const ASSISTANT_ROLE_SELECTORS = [
+  '[data-message-author-role="assistant"]',
+  '[data-role="assistant"]',
+  '[data-message-author="assistant"]',
+];
+const ASSISTANT_CANDIDATE_SELECTOR = [
+  '[data-turn="assistant"]',
+  '.agent-turn',
+  ...ASSISTANT_ROLE_SELECTORS,
+].join(', ');
 const ASSISTANT_COMPLETION_SELECTORS = [
   'button[data-testid="copy-turn-action-button"]',
   'button[aria-label*="Copy response" i]',
@@ -136,18 +145,44 @@ const hasConfirmation = (document: Document): boolean => {
 };
 
 const assistantTurnRoot = (message: HTMLElement): HTMLElement =>
-  message.closest<HTMLElement>('[data-testid^="conversation-turn-"], [data-turn-id], [data-turn="assistant"]') ?? message;
+  message.closest<HTMLElement>('[data-turn="assistant"]')
+  ?? message.closest<HTMLElement>('[data-testid^="conversation-turn-"]')
+  ?? message.closest<HTMLElement>('[data-turn-id]')
+  ?? message.closest<HTMLElement>('.agent-turn')
+  ?? message;
+
+interface AssistantEntry {
+  turn: HTMLElement;
+  message: HTMLElement;
+}
+
+const assistantEntries = (document: Document): AssistantEntry[] => {
+  const candidates = [...document.querySelectorAll<HTMLElement>(ASSISTANT_CANDIDATE_SELECTOR)];
+  const entries: AssistantEntry[] = [];
+  const seenTurns = new Set<HTMLElement>();
+  const roleSelector = ASSISTANT_ROLE_SELECTORS.join(', ');
+
+  for (const candidate of candidates) {
+    const turn = assistantTurnRoot(candidate);
+    if (seenTurns.has(turn)) continue;
+    const message = candidate.matches(roleSelector)
+      ? candidate
+      : firstWithin<HTMLElement>(turn, ASSISTANT_ROLE_SELECTORS) ?? candidate;
+    seenTurns.add(turn);
+    entries.push({ turn, message });
+  }
+  return entries;
+};
 
 const assistantState = (document: Document): { count: number; completionControlPresent: boolean; latestTurnKey?: string } => {
-  const messages = [...document.querySelectorAll<HTMLElement>(ASSISTANT_SELECTOR)];
-  const latestMessage = messages.at(-1);
-  if (!latestMessage) return { count: 0, completionControlPresent: false };
-  const latestTurn = assistantTurnRoot(latestMessage);
-  const completionControl = firstWithin<HTMLButtonElement>(latestTurn, ASSISTANT_COMPLETION_SELECTORS);
+  const entries = assistantEntries(document);
+  const latest = entries.at(-1);
+  if (!latest) return { count: 0, completionControlPresent: false };
+  const completionControl = firstWithin<HTMLButtonElement>(latest.turn, ASSISTANT_COMPLETION_SELECTORS);
   return {
-    count: messages.length,
+    count: entries.length,
     completionControlPresent: Boolean(completionControl && !isDisabled(completionControl)),
-    latestTurnKey: assistantObservationKey(latestTurn, latestMessage, messages.length),
+    latestTurnKey: assistantObservationKey(latest.turn, latest.message, entries.length),
   };
 };
 
@@ -206,16 +241,15 @@ export class DOMChatGPTAdapter implements ChatGPTAdapter {
   }
 
   getLatestCompletedAssistantArtifact(): AssistantArtifact | null {
-    const messages = [...this.document.querySelectorAll<HTMLElement>(ASSISTANT_SELECTOR)];
-    const latestMessage = messages.at(-1);
-    if (!latestMessage) return null;
-    const latestTurn = assistantTurnRoot(latestMessage);
-    const completionControl = firstWithin<HTMLButtonElement>(latestTurn, ASSISTANT_COMPLETION_SELECTORS);
+    const entries = assistantEntries(this.document);
+    const latest = entries.at(-1);
+    if (!latest) return null;
+    const completionControl = firstWithin<HTMLButtonElement>(latest.turn, ASSISTANT_COMPLETION_SELECTORS);
     if (!completionControl || isDisabled(completionControl)) return null;
-    const text = assistantText(latestMessage);
+    const text = assistantText(latest.message);
     if (!text) return null;
     return {
-      turnKey: assistantTurnKey(latestTurn, latestMessage, messages.length),
+      turnKey: assistantTurnKey(latest.turn, latest.message, entries.length),
       text,
     };
   }
