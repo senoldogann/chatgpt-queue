@@ -19,6 +19,8 @@ describe('context pressure', () => {
     expect(estimateTokens('')).toBe(0);
     expect(estimateTokens('abcd')).toBe(1);
     expect(estimateTokens('abcde')).toBe(2);
+    expect(estimateTokens('şşşş')).toBeGreaterThan(1);
+    expect(estimateTokens('const value = foo.bar();')).toBeGreaterThan(4);
   });
 
   it('moves the thresholds with the resolved capacity instead of a fixed token limit', () => {
@@ -51,5 +53,13 @@ describe('context pressure', () => {
     expect(formatContextPressure(reading)).toContain('(est.');
     expect(formatContextPressure(reading)).toContain('configured by you');
     expect(formatContextPressure(reading)).toContain('1,310,000');
+  });
+
+  it('marks a bounded visible-turn sample as a lower bound', () => {
+    const capacity = resolveContextCapacity({ configuredTokens: 128_000 });
+    const reading = measureContextPressure(turns(400, 200), capacity, { sampleTruncated: true });
+
+    expect(reading.sampleTruncated).toBe(true);
+    expect(formatContextPressure(reading)).toContain('at least');
   });
 });

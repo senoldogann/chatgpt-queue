@@ -7,7 +7,7 @@ The extension advances the queue by observing the real ChatGPT page state. It do
 ## Features
 
 - Per-conversation follow-up queues with up to 50 items.
-- Add, edit, delete, and reorder queued items.
+- Add, edit, delete, reorder, collapse, and expand queued items; the Queue tab has one aggregate **Collapse / Expand** control that applies to every queued follow-up, and collapsed rows keep **Expand + Delete** available.
 - Start, pause, and resume queue execution.
 - Durable `chrome.storage.local` state.
 - Durable `queued -> sending` reservation with a unique dispatch token before touching the page.
@@ -18,11 +18,11 @@ The extension advances the queue by observing the real ChatGPT page state. It do
 - Different conversations can run independently in different tabs.
 - Temporary new-chat queue keys migrate to the real conversation ID after ChatGPT assigns one.
 - Local completion/blocked notifications.
-- CSS-only running activity indicator in both expanded and collapsed Queue UI.
+- CSS-only running activity indicator in both expanded and collapsed Queue UI, plus a real-time **Active time** counter derived from queue item start/completion timestamps.
 - Non-mutating adapter interface health, with on-demand diagnostics, so ChatGPT DOM drift is visible before it blocks a queue.
 - A local context-pressure estimate driven by a runtime-resolved capacity instead of a hardcoded model limit.
 - **Compact & continue**: ask the current conversation for a validated handoff brief, then open a fresh chat seeded with that brief and the follow-ups you had queued.
-- **English and Turkish panel UI**, switchable at any time from the panel header (`Auto`, `EN`, `TR`); `Auto` follows the browser language.
+- **English and Turkish panel UI**, switchable at any time from the panel header (`Auto`, `EN`, `TR`); `Auto` follows the browser language. The panel is split into **Queue / Workflow / System** tabs to keep dense controls understandable.
 - **Built-in usage guide**: a step-by-step walkthrough that highlights the real control each step describes, with visible progress, directly in the panel.
 
 ## Requirements
@@ -67,6 +67,8 @@ Built-in workflows:
 - **Open Code Review** — a precision-first review adapted from Alibaba's [Open Code Review](https://github.com/alibaba/open-code-review) (Apache-2.0): deterministic scope selection, rule-matched defect detection, an independent positioning pass, and a reflection pass that drops unproven findings. It is a prompt workflow derived from that published methodology; the `ocr` binary is not bundled and no external service is contacted.
 
 Each preset contains chained ChatGPT steps and requires non-empty output at every stage. Presets are copied before use, so a selected workflow cannot mutate the built-in catalog. **Load custom workflow** remains available for developer-authored files.
+
+The panel labels every workflow input as **Required** or **Optional** and shows localized guidance for the built-in fields. For example, **Code Review** and **Open Code Review** require `diff`: paste a `git diff` or describe the exact code change to review. Their `context` field is optional and is for repository/module constraints or surrounding behavior that the diff does not show. The other built-in workflows expose equivalent guidance for `change`, `requirements`, `symptom`, `evidence`, and `release`.
 
 A workflow can chain completed assistant output into later prompts:
 
@@ -157,17 +159,19 @@ See `docs/superpowers/specs/2026-09-12-flowrun-v0.3-unattended-cli-bridge-design
 
 ## Context and handoff
 
-The Queue panel shows a **Context** section next to the adapter interface state. It answers one question — how close is this conversation to running out of room? — without calling an API or reading anything the page does not already display.
+The **System** tab shows the **Context** section next to the adapter interface state. It answers one question — how close is this conversation to running out of room? — without calling an API or reading anything the page does not already display.
 
 **The capacity is resolved at runtime, never assumed.** `src/context/capacity.ts` resolves it in this order and labels which source won:
 
-1. a capacity the host page declares about itself (`data-context-window-tokens`) — `Reported by the page`,
-2. the value you type into **Capacity override (tokens)** — `Configured by you`,
+1. the value you type into **Capacity override (tokens)** — `Configured by you`,
+2. a capacity the host page declares about itself (`data-context-window-tokens`) — `Reported by the page`,
 3. a deliberately conservative fallback — `Conservative fallback`.
+
+The explicit field is an actual override: if both a page declaration and your configured value exist, your value wins.
 
 Only the third source is a constant, and it is always shown as such. Nothing in the pressure maths compares against a fixed model limit: the levels (`watch`, `compact`, `critical`) are fractions of whatever capacity was resolved, so a larger window moves the thresholds automatically.
 
-**The reading is an estimate and says so.** Used tokens are approximated from the visible conversation text, so the panel prints `~N% of <capacity> tokens (est. … over N turns, <source>)`. Treat it as a trend indicator, not a measurement; if you know your real window, set the override and the percentage becomes exact relative to that number.
+**The reading is an estimate and says so.** Used tokens are approximated only from conversation text that is currently present in the page DOM. The estimator uses UTF-8 size plus a conservative lexical floor so Unicode-heavy text and source code are not treated like plain ASCII at a fixed four-characters-per-token rate. It scans up to the most recent 400 visible turns; if more are present, the panel reports an **at least** lower bound and explicitly says older visible turns were omitted. ChatGPT's exact tokenizer, hidden system/tool tokens, and any conversation text virtualized out of the DOM are not available to the extension. Treat the number as a pressure/trend indicator, not a server-side measurement. Setting **Capacity override** makes the denominator the value you chose; the used-token side remains an estimate.
 
 **Compact & continue** recovers a conversation that is close to its limit. Pressing it:
 
@@ -219,7 +223,7 @@ New to the panel? Press the **?** button in the panel header. The usage guide wa
 
 1. Open a ChatGPT conversation.
 2. Add one or more follow-up messages in the Queue panel.
-3. Reorder or edit queued items if needed.
+3. Reorder or edit queued items if needed. Use the Queue tab’s **Collapse** control to collapse every queued follow-up at once; when all are collapsed it becomes **Expand**. Each collapsed row keeps **Expand** and a delete icon beside it, and unsaved drafts stay mounted while collapsed.
 4. Press **Start**.
 5. The extension reserves exactly one item in local storage before placing it in the ChatGPT composer and clicking Send.
 6. The next item is not sent until generation has been observed, an assistant response has appeared, the composer/send state is ready again, and the DOM has reached a short quiescent period.
@@ -277,7 +281,7 @@ The project does not read browser cookies or credentials, call the OpenAI API, s
 - A queue whose owner lease lapses while work is in flight (a tab that crashed, was frozen, or was discarded) is reported as stalled by any tab that opens it. Recovery is explicit: reloading the page takes the lease and re-evaluates from the page's real state.
 - When the page goes idle after an observed response but no completed assistant turn can be proven, the queue blocks with `completion-not-observed` instead of waiting forever. The bound is measured from the moment the page became idle, so a long answer is never cut short by a long generation.
 - Browser notifications depend on the browser/OS notification environment.
-- The context percentage is a character-based estimate, not token accounting; ChatGPT Web exposes no usage counter. The adapter interface check reports only what the current page structure proves, and it does not verify the model or plan.
+- The context percentage is a visible-text estimate based on UTF-8 size plus a conservative lexical floor, not server-side token accounting; ChatGPT Web exposes no usage counter. The adapter interface check reports only what the current page structure proves, and it does not verify the model or plan.
 
 ## Project structure
 

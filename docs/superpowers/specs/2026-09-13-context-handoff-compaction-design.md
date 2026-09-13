@@ -12,8 +12,9 @@ The extension cannot read server-side token accounting, and model windows change
 the page. A hardcoded limit would silently become wrong. So `src/context/capacity.ts` resolves a
 `ContextCapacity` at runtime and every consumer takes that resolved value:
 
-1. `runtime-declared` — a capacity the host page declares about itself via `data-context-window-tokens`.
-2. `user-configured` — the **Capacity override (tokens)** field in the panel.
+1. `user-configured` — the **Capacity override (tokens)** field in the panel. Because this is an
+   explicit override, it wins even when the page also declares a value.
+2. `runtime-declared` — a capacity the host page declares about itself via `data-context-window-tokens`.
 3. `capability-default` — a deliberately conservative fallback constant.
 
 Only the third source is a constant, it is the last resort, and the panel always prints which source
@@ -24,9 +25,15 @@ automatically.
 ## Pressure estimate
 
 `measureContextPressure` sums the visible conversation text plus a small per-turn overhead and divides
-by the resolved capacity. It is labeled an estimate everywhere it is shown, because characters are not
-tokens. The sample is bounded (40 turns) and refreshed on a budget (1.5 s) rather than per render,
-because assistant text must be cloned out of the DOM to strip controls.
+by the resolved capacity. It is labeled an estimate everywhere it is shown because the extension cannot
+read the model's tokenizer or server-side system/tool tokens. The text heuristic uses UTF-8 byte size
+plus a lexical floor so non-ASCII text and punctuation-heavy source code are not systematically
+undercounted by a fixed JavaScript-character ratio. The sample is bounded to the most recent 400 visible
+turns and refreshed on a budget (1.5 s) rather than per render, because assistant text must be cloned
+out of the DOM to strip controls. The collector probes one extra turn; when the bound is hit, the UI
+reports an **at least** lower bound and explicitly says older visible turns were omitted rather than
+presenting the sample as the full conversation. Text virtualized out of the page DOM remains unknowable
+and is called out in the UI disclaimer.
 
 ## Adapter interface health
 

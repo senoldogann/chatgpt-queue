@@ -60,7 +60,8 @@ const ASSISTANT_COMPLETION_SELECTORS = [
 
 const USER_ROLE_SELECTOR = USER_ROLE_SELECTORS.join(', ');
 const CONVERSATION_MESSAGE_SELECTOR = [...USER_ROLE_SELECTORS, ...ASSISTANT_CANDIDATE_SELECTOR.split(', ')].join(', ');
-const DEFAULT_CONVERSATION_TURN_LIMIT = 40;
+/** High enough for normal long chats while still bounding clone/clean work on pathological pages. */
+const DEFAULT_CONVERSATION_TURN_LIMIT = 400;
 
 const SEND_CONTROL_WAIT_MS = 1_500;
 

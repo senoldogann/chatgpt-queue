@@ -34,6 +34,8 @@ const CONTEXT_WATCHDOG_MS = 3_000;
 const FLOWRUN_RECONCILE_MS = 500;
 /** The context estimate clones visible turns, so it refreshes on a budget rather than per render. */
 const CONTEXT_REFRESH_MS = 1_500;
+/** Bound DOM cloning while probing one extra turn so the UI can report a lower bound honestly. */
+const CONTEXT_VISIBLE_TURN_LIMIT = 400;
 /** A tab that does not own the queue still refreshes local panel state, but not per DOM mutation. */
 const PASSIVE_RENDER_MIN_MS = 1_000;
 
@@ -202,7 +204,10 @@ const currentContextPressure = (): ContextPressure => {
     runtimeDeclaredTokens: readRuntimeDeclaredCapacity(document),
     configuredTokens: contextCapacityOverride,
   });
-  pressureCache = measureContextPressure(adapter.getConversationTurns(), capacity);
+  const sampledTurns = adapter.getConversationTurns(CONTEXT_VISIBLE_TURN_LIMIT + 1);
+  const sampleTruncated = sampledTurns.length > CONTEXT_VISIBLE_TURN_LIMIT;
+  const measuredTurns = sampleTruncated ? sampledTurns.slice(-CONTEXT_VISIBLE_TURN_LIMIT) : sampledTurns;
+  pressureCache = measureContextPressure(measuredTurns, capacity, { sampleTruncated });
   pressureCacheAt = now;
   return pressureCache;
 };

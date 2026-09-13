@@ -5,8 +5,8 @@
  * signal in the page. So instead of baking a limit into the pressure maths, every consumer takes
  * a resolved {@link ContextCapacity} and the resolution order is explicit:
  *
- * 1. a value the host page declares about itself (`runtime-declared`),
- * 2. the user's explicit configuration (`user-configured`),
+ * 1. the user's explicit override (`user-configured`),
+ * 2. a value the host page declares about itself (`runtime-declared`),
  * 3. a deliberately conservative fallback (`capability-default`).
  *
  * Only the third source is a constant, it is the last resort, and it is always labeled as such in
@@ -47,20 +47,20 @@ export const isUsableContextCapacity = (value: unknown): value is number =>
   && value <= MAX_CONTEXT_CAPACITY_TOKENS;
 
 export function resolveContextCapacity(signals: ContextCapacitySignals = {}): ContextCapacity {
-  if (isUsableContextCapacity(signals.runtimeDeclaredTokens)) {
-    return {
-      id: 'runtime:declared',
-      label: 'Reported by the page',
-      usableTokens: Math.floor(signals.runtimeDeclaredTokens),
-      source: 'runtime-declared',
-    };
-  }
   if (isUsableContextCapacity(signals.configuredTokens)) {
     return {
       id: 'configured',
       label: 'Configured by you',
       usableTokens: Math.floor(signals.configuredTokens),
       source: 'user-configured',
+    };
+  }
+  if (isUsableContextCapacity(signals.runtimeDeclaredTokens)) {
+    return {
+      id: 'runtime:declared',
+      label: 'Reported by the page',
+      usableTokens: Math.floor(signals.runtimeDeclaredTokens),
+      source: 'runtime-declared',
     };
   }
   return {

@@ -8,22 +8,22 @@ import {
 } from '../../src/context/capacity';
 
 describe('context capacity resolution', () => {
-  it('prefers a value the page declares over everything else', () => {
+  it('lets an explicit user override win over a page declaration', () => {
     const capacity = resolveContextCapacity({ runtimeDeclaredTokens: 1_310_000, configuredTokens: 200_000 });
 
     expect(capacity).toEqual({
-      id: 'runtime:declared',
-      label: 'Reported by the page',
-      usableTokens: 1_310_000,
-      source: 'runtime-declared',
+      id: 'configured',
+      label: 'Configured by you',
+      usableTokens: 200_000,
+      source: 'user-configured',
     });
   });
 
-  it('uses the user configuration when the page declares nothing', () => {
-    const capacity = resolveContextCapacity({ configuredTokens: 400_000 });
+  it('uses a page declaration when there is no user override', () => {
+    const capacity = resolveContextCapacity({ runtimeDeclaredTokens: 400_000 });
 
     expect(capacity.usableTokens).toBe(400_000);
-    expect(capacity.source).toBe('user-configured');
+    expect(capacity.source).toBe('runtime-declared');
   });
 
   it('falls back to a clearly labeled conservative default instead of assuming a model limit', () => {

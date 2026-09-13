@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { AdapterInterfaceReport } from '../src/adapter/chatgpt-adapter';
 import { resolveContextCapacity } from '../src/context/capacity';
 import { measureContextPressure } from '../src/context/pressure';
-import { QueuePanel } from '../src/ui/queue-panel';
+import { QueuePanel, formatActiveDuration, totalActiveDurationMs } from '../src/ui/queue-panel';
 import type { ConversationQueue } from '../src/domain/types';
 import type { WorkflowRun } from '../src/flowrun/events';
 import type { WorkflowDefinition } from '../src/flowrun/schema';
@@ -55,6 +55,74 @@ const sampleQueue = (): ConversationQueue => ({
 });
 
 describe('QueuePanel', () => {
+  it('calculates and formats total active duration from completed and live items', () => {
+    const queue: ConversationQueue = {
+      ...idleQueue(),
+      status: 'running',
+      items: [
+        { id: 'done', content: 'Done', state: 'completed', createdAt: 1, updatedAt: 8_000, startedAt: 2_000, completedAt: 8_000 },
+        { id: 'live', content: 'Live', state: 'running', createdAt: 1, updatedAt: 14_000, startedAt: 14_000 },
+        { id: 'queued', content: 'Queued', state: 'queued', createdAt: 1, updatedAt: 1 },
+      ],
+      runtime: { phase: 'generating', activeItemId: 'live' },
+    };
+
+    expect(totalActiveDurationMs(queue, 20_000)).toBe(12_000);
+    expect(formatActiveDuration(3_723_000)).toBe('01:02:03');
+  });
+
+  it('updates only the live active-duration node once per second', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(20_000));
+    try {
+      const host = document.createElement('div');
+      document.body.append(host);
+      const panel = new QueuePanel(host, {});
+      const queue: ConversationQueue = {
+        ...idleQueue(),
+        status: 'running',
+        items: [{ id: 'live', content: 'Live', state: 'running', createdAt: 1, updatedAt: 10_000, startedAt: 10_000 }],
+        runtime: { phase: 'generating', activeItemId: 'live' },
+      };
+
+      panel.render(queue);
+      const renderSpy = vi.spyOn(panel, 'render');
+      expect(host.shadowRoot!.querySelector('[data-role="active-duration"]')?.textContent).toContain('00:00:10');
+
+      vi.advanceTimersByTime(1_000);
+
+      expect(host.shadowRoot!.querySelector('[data-role="active-duration"]')?.textContent).toContain('00:00:11');
+      expect(renderSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('switches Queue, Workflow, and System tabs without losing drafts', () => {
+    const host = document.createElement('div');
+    document.body.append(host);
+    const panel = new QueuePanel(host, {});
+    panel.render(sampleQueue(), undefined, { context: { pressure: pressure(100_000) } });
+    const root = host.shadowRoot!;
+
+    const queueTab = root.querySelector<HTMLButtonElement>('[data-tab="queue"]')!;
+    const workflowTab = root.querySelector<HTMLButtonElement>('[data-tab="workflow"]')!;
+    const systemTab = root.querySelector<HTMLButtonElement>('[data-tab="system"]')!;
+    expect(root.querySelector('[role="tablist"]')).not.toBeNull();
+    expect(queueTab.getAttribute('aria-selected')).toBe('true');
+
+    const draft = root.querySelector<HTMLTextAreaElement>('[data-role="new-message"]')!;
+    draft.value = 'keep this draft';
+    workflowTab.click();
+    expect(workflowTab.getAttribute('aria-selected')).toBe('true');
+    expect(root.querySelector<HTMLElement>('[data-panel="queue"]')!.hidden).toBe(true);
+    expect(root.querySelector<HTMLElement>('[data-panel="workflow"]')!.hidden).toBe(false);
+
+    systemTab.click();
+    expect(root.querySelector<HTMLElement>('[data-panel="system"]')!.hidden).toBe(false);
+    queueTab.click();
+    expect(root.querySelector<HTMLTextAreaElement>('[data-role="new-message"]')!.value).toBe('keep this draft');
+  });
   it('renders status, pending count, active and completed items', () => {
     const host = document.createElement('div');
     document.body.append(host);
@@ -97,6 +165,51 @@ describe('QueuePanel', () => {
     expect(edit).toHaveBeenCalledWith('wait', 'Run all tests');
     expect(remove).toHaveBeenCalledWith('wait');
     expect(reorder).toHaveBeenCalledWith('wait', -1);
+  });
+
+  it('collapses every queued follow-up at once and keeps Expand plus Delete on collapsed rows', async () => {
+    const remove = vi.fn();
+    const host = document.createElement('div');
+    document.body.append(host);
+    const panel = new QueuePanel(host, { remove });
+    const queue: ConversationQueue = {
+      ...sampleQueue(),
+      status: 'idle',
+      items: [
+        { id: 'one', content: 'First follow-up', state: 'queued', createdAt: 1, updatedAt: 1 },
+        { id: 'two', content: 'Second follow-up', state: 'queued', createdAt: 1, updatedAt: 1 },
+        { id: 'three', content: 'Third follow-up', state: 'queued', createdAt: 1, updatedAt: 1 },
+      ],
+      runtime: { phase: 'idle' },
+    };
+
+    panel.render(queue);
+    const root = host.shadowRoot!;
+    const firstDraft = root.querySelector<HTMLTextAreaElement>('[data-item-id="one"]')!;
+    firstDraft.value = 'Edited but not saved';
+
+    const aggregate = root.querySelector<HTMLButtonElement>('[data-action="toggle-all-items"]')!;
+    expect(aggregate.textContent).toContain('Collapse');
+    aggregate.click();
+    expect(root.querySelectorAll('.item.queued.item-collapsed')).toHaveLength(3);
+    expect(aggregate.textContent).toContain('Expand');
+
+    const firstRow = root.querySelector<HTMLElement>('[data-queue-item-id="one"]')!;
+    expect(firstRow.querySelector('[data-action="toggle-item"]')).not.toBeNull();
+    const collapsedDelete = firstRow.querySelector<HTMLButtonElement>('[data-action="delete"]')!;
+    expect(collapsedDelete).not.toBeNull();
+    expect(firstRow.querySelector('.queued-preview')?.textContent).toBe('Edited but not saved');
+    collapsedDelete.click();
+    await Promise.resolve();
+    expect(remove).toHaveBeenCalledWith('one');
+
+    panel.render({ ...queue, status: 'paused', updatedAt: 99 });
+    expect(root.querySelectorAll('.item.queued.item-collapsed')).toHaveLength(3);
+    expect(root.querySelector<HTMLTextAreaElement>('[data-item-id="one"]')!.value).toBe('Edited but not saved');
+
+    root.querySelector<HTMLButtonElement>('[data-action="toggle-all-items"]')!.click();
+    expect(root.querySelectorAll('.item.queued.item-collapsed')).toHaveLength(0);
+    expect(root.querySelector<HTMLTextAreaElement>('[data-item-id="one"]')!.value).toBe('Edited but not saved');
   });
 
   it('preserves a focused new-message draft across rerenders and clears it after a successful add', async () => {
@@ -213,7 +326,7 @@ describe('QueuePanel', () => {
       name: 'review-pr',
       inputs: {
         diff: { type: 'string', required: true },
-        language: { type: 'string' },
+        context: { type: 'string' },
       },
       steps: [
         { id: 'review', type: 'chat', provider: 'chatgpt', prompt: 'Review {{ inputs.diff }}' },
@@ -237,24 +350,51 @@ describe('QueuePanel', () => {
     };
     panel.render(idle, undefined, { workflow });
     root = host.shadowRoot!;
-    const diff = root.querySelector<HTMLInputElement>('[data-workflow-input="diff"]')!;
-    const language = root.querySelector<HTMLInputElement>('[data-workflow-input="language"]')!;
+    const diff = root.querySelector<HTMLTextAreaElement>('[data-workflow-input="diff"]')!;
+    const context = root.querySelector<HTMLTextAreaElement>('[data-workflow-input="context"]')!;
+    expect(root.textContent).toContain('Required');
+    expect(root.textContent).toContain('Optional');
+    expect(root.textContent).toContain('git diff');
+    expect(root.textContent).toContain('repository or module constraints');
     diff.value = 'diff content';
-    language.value = 'tr';
+    context.value = 'repository context';
     diff.focus();
     diff.setSelectionRange(4, 4);
 
     panel.render({ ...idle, updatedAt: 99 }, undefined, { workflow });
     root = host.shadowRoot!;
-    expect(root.querySelector<HTMLInputElement>('[data-workflow-input="diff"]')!.value).toBe('diff content');
+    expect(root.querySelector<HTMLTextAreaElement>('[data-workflow-input="diff"]')!.value).toBe('diff content');
     expect(root.activeElement).toBe(root.querySelector('[data-workflow-input="diff"]'));
 
     root.querySelector<HTMLButtonElement>('[data-action="run-workflow"]')!.click();
     root.querySelector<HTMLButtonElement>('[data-action="clear-workflow"]')!.click();
     await Promise.resolve();
 
-    expect(runWorkflow).toHaveBeenCalledWith({ diff: 'diff content', language: 'tr' });
+    expect(runWorkflow).toHaveBeenCalledWith({ diff: 'diff content', context: 'repository context' });
     expect(clearWorkflow).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders workflow input guidance fully in Turkish', () => {
+    const host = document.createElement('div');
+    document.body.append(host);
+    const panel = new QueuePanel(host, {});
+    const workflow: WorkflowDefinition = {
+      version: 1,
+      name: 'code-review',
+      inputs: {
+        diff: { type: 'string', required: true },
+        context: { type: 'string' },
+      },
+      steps: [{ id: 'review', type: 'chat', provider: 'chatgpt', prompt: 'Review {{ inputs.diff }}' }],
+    };
+
+    panel.render(idleQueue(), undefined, { workflow, locale: 'tr', localePreference: 'tr' });
+    const text = host.shadowRoot!.textContent!;
+    expect(text).toContain('Kod İncelemesi');
+    expect(text).toContain('Değişiklik / diff');
+    expect(text).toContain('Zorunlu');
+    expect(text).toContain('Ek bağlam');
+    expect(text).toContain('İsteğe bağlı');
   });
 
   it('renders professional workflow presets, previews the selection, and loads one only from an explicit action', async () => {
@@ -450,6 +590,30 @@ describe('QueuePanel', () => {
     root = host.shadowRoot!;
     expect(root.querySelector('[data-role="adapter-health"]')?.textContent).toBe('interface degraded');
     expect(root.querySelector<HTMLInputElement>('input[data-role="context-capacity"]')!.value).toBe('250000');
+  });
+
+  it('rerenders context wording when only the estimate scope or capacity source changes', () => {
+    const host = document.createElement('div');
+    document.body.append(host);
+    const panel = new QueuePanel(host, {});
+    const initial = pressure(10_000);
+
+    panel.render(idleQueue(), undefined, { context: { pressure: initial } });
+    expect(host.shadowRoot!.querySelector('[data-role="context-detail"]')?.textContent).toContain('your override');
+    expect(host.shadowRoot!.querySelector('[data-role="context-detail"]')?.textContent).not.toContain('at least');
+
+    panel.render(idleQueue(), undefined, {
+      context: {
+        pressure: {
+          ...initial,
+          sampleTruncated: true,
+          capacity: resolveContextCapacity({ runtimeDeclaredTokens: 10_000 }),
+        },
+      },
+    });
+    const detail = host.shadowRoot!.querySelector('[data-role="context-detail"]')?.textContent ?? '';
+    expect(detail).toContain('at least');
+    expect(detail).toContain('reported by the page');
   });
 
   it('only offers a handoff when the adapter is recognized, and never opens one implicitly', async () => {

@@ -418,6 +418,17 @@ describe('DOMChatGPTAdapter', () => {
     expect(adapter.getConversationTurns(0)).toEqual([]);
   });
 
+  it('does not silently cut a long visible conversation down to 40 turns', () => {
+    const transcript = Array.from({ length: 60 }, (_, index) =>
+      `<article data-message-author-role="${index % 2 === 0 ? 'user' : 'assistant'}">turn ${index + 1}</article>`,
+    ).join('');
+    const adapter = render(`<main>${transcript}</main>`);
+
+    expect(adapter.getConversationTurns()).toHaveLength(60);
+    expect(adapter.getConversationTurns().at(0)?.text).toBe('turn 1');
+    expect(adapter.getConversationTurns().at(-1)?.text).toBe('turn 60');
+  });
+
   it('changes fallback assistant turn identity when virtualization replaces a turn without changing count', () => {
     const adapter = render(`
       <main>
