@@ -241,6 +241,7 @@ Examples include:
 - Conversation ownership conflicts.
 - A send click whose result cannot be confirmed.
 - Recovery after a reload/restart while an item is still in `sending`.
+- `completion-not-observed`: the page went idle after an observed response but no completed assistant turn could ever be proven, so the queue blocks after a bounded wait instead of pretending it can still finish the item.
 
 An unresolved persisted `sending` item is intentionally recovered as `blocked: uncertain-send`. Automatic resend is forbidden because the original click may already have reached ChatGPT.
 
@@ -274,6 +275,7 @@ The project does not read browser cookies or credentials, call the OpenAI API, s
 - A queue is tied to the ChatGPT conversation identity derived from the current URL. Temporary new-chat state is migrated once a real `/c/<conversation-id>` URL appears.
 - Reloading or updating the extension orphans the content scripts already running in open ChatGPT tabs. Such a page can neither read nor write its queue until it is reloaded, so the panel detects that state and reports **Disconnected** with a reload hint instead of continuing to show the queue as running. The persisted queue is untouched and resumes when the page is reloaded.
 - A queue whose owner lease lapses while work is in flight (a tab that crashed, was frozen, or was discarded) is reported as stalled by any tab that opens it. Recovery is explicit: reloading the page takes the lease and re-evaluates from the page's real state.
+- When the page goes idle after an observed response but no completed assistant turn can be proven, the queue blocks with `completion-not-observed` instead of waiting forever. The bound is measured from the moment the page became idle, so a long answer is never cut short by a long generation.
 - Browser notifications depend on the browser/OS notification environment.
 - The context percentage is a character-based estimate, not token accounting; ChatGPT Web exposes no usage counter. The adapter interface check reports only what the current page structure proves, and it does not verify the model or plan.
 
@@ -335,7 +337,9 @@ Cut a release:
 3. Merge that change to `main`, then push the tag: `git tag v0.1.0-rc.4 && git push origin v0.1.0-rc.4`.
 4. The Release workflow verifies the tagged commit (unit/integration tests, typecheck, production/CLI/native-host builds, browser E2E), confirms the tag is an ancestor of `main`, requires the release notes file, packages the extension from that same verified build, and publishes the GitHub Release with `chatgpt-queue-<tag>.zip` and `chatgpt-queue-<tag>.zip.sha256`. Tags containing a suffix such as `-rc.4` are published as pre-releases.
 
-To rehearse without publishing, run the **Release** workflow from the Actions tab with `dry_run` left enabled; the packaged assets then stay workflow artifacts. The same packaging step is available locally:
+To rehearse without publishing, run the **Release** workflow from the Actions tab with `dry_run` left enabled; the packaged assets then stay workflow artifacts.
+
+The same packaging step is available locally:
 
 ```bash
 npm run build
@@ -343,3 +347,4 @@ npm run package:release -- --tag v0.1.0-rc.4
 ```
 
 The packaging script is deterministic: it stages the built `dist/` files with a fixed timestamp, refuses to package a build whose manifest references a file that is not present, and writes the archive plus `<archive>.sha256` into the git-ignored `release/` directory.
+
