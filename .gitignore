@@ -6,4 +6,5 @@ dist-native/
 test-results/
 playwright-report/
 .DS_Store
+.freebuff/
 .worktrees/
