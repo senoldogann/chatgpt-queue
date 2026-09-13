@@ -10,8 +10,8 @@ One or two sentences describing the headline of this release.
 Changes since <previous tag>:
 - <user-visible change, with the pull request number>
 
-Verification for `<full commit sha>`:
-- <test and build evidence for this exact commit>
+Verification for the tagged commit (the Release workflow appends the exact SHA):
+- <test and build evidence for this change>
 
 Remaining RC limitation:
 - <what this release deliberately does not validate yet, or "None" for a non-RC release>
