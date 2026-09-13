@@ -114,6 +114,45 @@ test('reports the live adapter interface health and a local context estimate in 
   await expect(detail).toContainText('send-testid=true');
 });
 
+test('walks the built-in usage guide with visible progress and switches the panel to Turkish', async ({ extensionContext, extensionWorker }) => {
+  const page = await openFixture(extensionContext, '/c/usage-guide');
+  const root = queueRoot(page);
+
+  // The guide is closed until asked for, and opening it touches no queue state.
+  await expect(root.locator('[data-role="guide-card"]')).toHaveCount(0);
+  await expect(root.locator('[data-action="open-guide"]')).toHaveAttribute('aria-label', 'Open the guide');
+  await root.locator('[data-action="open-guide"]').click();
+  const card = root.locator('[data-role="guide-card"]');
+  await expect(card).toContainText('Welcome');
+  await expect(card).toContainText('Step 1 /');
+  await expect(root.locator('.guide-highlight')).toHaveCount(1);
+  await expect(root.locator('.dock')).toHaveClass(/guide-highlight/);
+
+  // Advancing the guide highlights the control the step describes and marks progress.
+  await card.locator('[data-action="guide-next"]').click();
+  await expect(card).toContainText('Add a follow-up');
+  await expect(root.locator('[data-role="new-message"]')).toHaveClass(/guide-highlight/);
+  await expect(root.locator('.guide-dot.done')).toHaveCount(1);
+
+  // Switching the language re-renders the panel and persists the choice for every tab.
+  await root.locator('[data-role="locale"]').selectOption('tr');
+  await expect(root).toContainText('Sırada mesaj yok.');
+  await expect(card).toContainText('Takip mesajı ekleyin');
+  await expect.poll(async () => extensionWorker.evaluate(async () => {
+    const data = await chrome.storage.local.get('chatgptQueueUiPreferences');
+    return (data.chatgptQueueUiPreferences as { locale?: string } | undefined)?.locale;
+  })).toBe('tr');
+
+  // Restore the shared preference so the other specs keep the English default.
+  await root.locator('[data-role="locale"]').selectOption('auto');
+  await expect(root).toContainText('No queued messages.');
+
+  // Walking the guide never sends anything to the conversation.
+  expect(await sentEvents(page, 'usage-guide')).toEqual([]);
+  await root.locator('[data-action="close-guide"]').click();
+  await expect(root.locator('[data-role="guide-card"]')).toHaveCount(0);
+});
+
 test('compacts a near-limit conversation into a fresh chat and carries the queued follow-ups', async ({ extensionContext, extensionWorker }) => {
   const page = await openFixture(extensionContext, `/c/handoff-source?auto-complete-ms=50&response=${encodeURIComponent(handoffBrief)}`);
   const root = queueRoot(page);

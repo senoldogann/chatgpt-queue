@@ -20,7 +20,9 @@ import { conversationKeyFromUrl, shouldMigrateConversationKey } from './runtime/
 import type { BridgeRunMessage } from './runtime/protocol';
 import { QueueRunner } from './runtime/queue-runner';
 import { chromeStorageArea } from './storage/queue-repository';
+import { createTranslator, resolveLocale, type Locale, type LocalePreference, type Translator } from './ui/i18n';
 import { QueuePanel, type QueuePanelContextView } from './ui/queue-panel';
+import { UiPreferencesRepository } from './ui/ui-preferences';
 
 const TEMP_SESSION_KEY = 'chatgpt-queue:temporary-key';
 const HANDOFF_IMPORT_SESSION_KEY = 'chatgpt-queue:handoff-imported';
@@ -67,6 +69,16 @@ const attemptedHandoffItems = new Set<string>();
 
 const handoffRepository = new HandoffRepository(chromeStorageArea());
 const contextSettings = new ContextSettingsRepository(chromeStorageArea());
+const uiPreferences = new UiPreferencesRepository(chromeStorageArea());
+let localePreference: LocalePreference = 'auto';
+let locale: Locale = 'en';
+let t: Translator = createTranslator('en');
+
+const applyLocale = (preference: LocalePreference): void => {
+  localePreference = preference;
+  locale = resolveLocale(preference, navigator.language ?? '');
+  t = createTranslator(locale);
+};
 
 const readImportedHandoffKey = (): string | undefined => {
   try {
@@ -106,7 +118,7 @@ const render = async (): Promise<ConversationQueue | undefined> => {
     await pauseForHandoffOnceDispatched(queue);
     await maybeCaptureHandoff(queue);
     const notice = queue.blockedReason === 'dom-unrecognized'
-      ? `DOM diagnostics: ${adapter.getDiagnosticSummary()}`
+      ? t('notice.domDiagnostics', { summary: adapter.getDiagnosticSummary() })
       : localNotice;
     panel.render(queue, notice, {
       ...(selectedWorkflow === undefined ? {} : { workflow: selectedWorkflow }),
@@ -114,6 +126,8 @@ const render = async (): Promise<ConversationQueue | undefined> => {
       ...(workflowError === undefined ? {} : { error: workflowError }),
       bridgeState,
       context: buildContextView(queue),
+      locale,
+      localePreference,
     });
   }
   return queue;
@@ -184,7 +198,7 @@ const maybeCaptureHandoff = async (queue: ConversationQueue): Promise<void> => {
   attemptedHandoffItems.add(completed.id);
   const parsed = parseHandoffBrief(artifact.text);
   if (!parsed.ok) {
-    localNotice = `Handoff brief rejected: ${parsed.errors.join(', ')}`;
+    localNotice = t('notice.handoffRejected', { errors: parsed.errors.join(', ') });
     return;
   }
 
@@ -215,17 +229,17 @@ const prepareHandoff = async (): Promise<void> => {
   const queue = await ensureCurrent();
   const report = adapter.inspectInterface();
   if (report.health !== 'ok') {
-    localNotice = `Handoff unavailable: adapter interface is ${report.health}.`;
+    localNotice = t('notice.handoffUnavailableAdapter', { health: report.health });
     await render();
     return;
   }
   if (queue.status === 'running' || queue.items.some((item) => ['sending', 'running'].includes(item.state))) {
-    localNotice = 'Handoff unavailable while the queue is actively sending. Pause it first.';
+    localNotice = t('notice.handoffUnavailableBusy');
     await render();
     return;
   }
   if (handoffRecord?.sourceConversationKey === currentKey) {
-    localNotice = 'A handoff brief is already ready. Continue in a new chat.';
+    localNotice = t('notice.handoffAlreadyReady');
     await render();
     return;
   }
@@ -241,7 +255,7 @@ const prepareHandoff = async (): Promise<void> => {
       await client.request({ type: 'reorder', key: currentKey, itemId: handoffItem.id, queuedIndex: 0 });
     }
   } catch (error) {
-    localNotice = `Could not prepare a handoff: ${error instanceof Error ? error.message : String(error)}`;
+    localNotice = t('notice.handoffPrepareFailed', { message: error instanceof Error ? error.message : String(error) });
     await render();
     return;
   }
@@ -252,7 +266,7 @@ const prepareHandoff = async (): Promise<void> => {
 const openHandoff = async (): Promise<void> => {
   const pending = handoffRecord ?? await handoffRepository.getPending();
   if (!pending) {
-    localNotice = 'No handoff brief is ready.';
+    localNotice = t('notice.noHandoff');
     await render();
     return;
   }
@@ -261,9 +275,9 @@ const openHandoff = async (): Promise<void> => {
       type: 'handoffOpen',
       url: new URL('/', location.origin).toString(),
     });
-    localNotice = `Opened a new chat for the handoff (tab ${opened.tabId}); it imports the brief on load.`;
+    localNotice = t('notice.handoffOpened', { tabId: opened.tabId });
   } catch (error) {
-    localNotice = `Unable to open a handoff chat: ${error instanceof Error ? error.message : String(error)}`;
+    localNotice = t('notice.handoffOpenFailed', { message: error instanceof Error ? error.message : String(error) });
   }
   await render();
 };
@@ -276,11 +290,17 @@ const importHandoffIfClaimed = async (): Promise<void> => {
   if (!pending || pending.sourceConversationKey === currentKey) return;
 
   const seed = buildHandoffSeed(pending.brief, pending.carriedItems);
-  await client.request({ type: 'add', key: currentKey, messages: seed });
-  await handoffRepository.consume(pending.id, currentKey, Date.now());
-  importedHandoffKey = currentKey;
-  writeImportedHandoffKey(currentKey);
-  localNotice = `Handoff imported: ${seed.length} queued message${seed.length === 1 ? '' : 's'} from the previous conversation.`;
+  try {
+    await client.request({ type: 'add', key: currentKey, messages: seed });
+    await handoffRepository.consume(pending.id, currentKey, Date.now());
+    importedHandoffKey = currentKey;
+    writeImportedHandoffKey(currentKey);
+    localNotice = seed.length === 1
+      ? t('notice.handoffImportedOne')
+      : t('notice.handoffImported', { count: seed.length });
+  } catch (error) {
+    localNotice = t('notice.handoffImportFailed', { message: error instanceof Error ? error.message : String(error) });
+  }
   await render();
 };
 
@@ -316,7 +336,7 @@ const claimCurrent = async (): Promise<boolean> => {
   const claim = await client.request<ClaimResult>({ type: 'claim', key: currentKey });
   if (claim.kind === 'conflict') {
     ownsCurrent = false;
-    localNotice = `Owned by another tab (${claim.ownerTabId})`;
+    localNotice = t('notice.ownedByOtherTab', { tabId: claim.ownerTabId });
     await render();
     return false;
   }
@@ -343,7 +363,7 @@ const syncIdentity = async (): Promise<void> => {
       await registerBridgeTarget().catch(() => undefined);
       return;
     } catch (error) {
-      localNotice = `Queue migration stopped: ${error instanceof Error ? error.message : String(error)}`;
+      localNotice = t('notice.migrationStopped', { message: error instanceof Error ? error.message : String(error) });
       await ensureCurrent();
     }
   } else {
@@ -486,7 +506,7 @@ chrome.runtime.onMessage.addListener((message: BridgeRunMessage, _sender, sendRe
   }
   void bridgeContentController.accept({ jobId: message.jobId, workflow: validated.value, inputs: { ...message.inputs } })
     .catch(async (error: unknown) => {
-      localNotice = `Bridge job failed: ${error instanceof Error ? error.message : String(error)}`;
+      localNotice = t('notice.bridgeJobFailed', { message: error instanceof Error ? error.message : String(error) });
       await render().catch(() => undefined);
     });
   sendResponse({ ok: true });
@@ -498,7 +518,7 @@ const loadWorkflowText = async (text: string): Promise<void> => {
   try {
     parsed = JSON.parse(text) as unknown;
   } catch (error) {
-    workflowError = `Invalid JSON: ${error instanceof Error ? error.message : String(error)}`;
+    workflowError = t('notice.invalidWorkflowJson', { message: error instanceof Error ? error.message : String(error) });
     await render();
     return;
   }
@@ -519,7 +539,7 @@ const loadWorkflowText = async (text: string): Promise<void> => {
 const loadWorkflowPreset = async (presetId: string): Promise<void> => {
   const preset = getWorkflowPreset(presetId);
   if (!preset) {
-    workflowError = `Unknown workflow preset: ${presetId}`;
+    workflowError = t('notice.unknownWorkflowPreset', { presetId });
     await render();
     return;
   }
@@ -532,7 +552,7 @@ const loadWorkflowPreset = async (presetId: string): Promise<void> => {
 
 const runSelectedWorkflow = async (inputs: Record<string, string>): Promise<void> => {
   if (!selectedWorkflow) {
-    workflowError = 'No workflow loaded.';
+    workflowError = t('notice.noWorkflowLoaded');
     await render();
     return;
   }
@@ -580,6 +600,11 @@ panel = new QueuePanel(host, {
   prepareHandoff,
   openHandoff,
   setContextCapacity,
+  setLocale: async (preference) => {
+    applyLocale(preference);
+    await uiPreferences.setLocale(preference).catch(() => undefined);
+    await render();
+  },
   enableBridge: async () => {
     bridgeState = 'enabling';
     await render();
@@ -629,7 +654,7 @@ function scheduleEvaluation(domStable: boolean): void {
       if (queue?.status === 'running' && queue.runtime.phase === 'ready_to_send_next') scheduleEvaluation(false);
     })
     .catch(async (error: unknown) => {
-      localNotice = `Queue paused locally: ${error instanceof Error ? error.message : String(error)}`;
+      localNotice = t('notice.pausedLocally', { message: error instanceof Error ? error.message : String(error) });
       await render().catch(() => undefined);
     });
 }
@@ -669,6 +694,8 @@ window.setInterval(() => {
 }, HEARTBEAT_MS);
 
 void (async () => {
+  const preferences = await uiPreferences.get().catch(() => undefined);
+  if (preferences) applyLocale(preferences.locale);
   contextCapacityOverride = await contextSettings.getCapacityTokens().catch(() => undefined);
   handoffRecord = await handoffRepository.getPending().catch(() => undefined);
   await importHandoffIfClaimed().catch(() => undefined);

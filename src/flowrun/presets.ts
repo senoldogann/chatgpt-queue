@@ -4,16 +4,35 @@ export interface WorkflowPreset {
   id: string;
   label: string;
   description: string;
+  /** Turkish UI text. Falls back to the English field; the prompts themselves are never translated. */
+  labelTr?: string;
+  descriptionTr?: string;
   workflow: WorkflowDefinition;
 }
 
+/** Picks the preset label/description for a panel locale without touching the workflow prompts. */
+export const localizedPresetText = (
+  preset: WorkflowPreset,
+  locale: string,
+): { label: string; description: string } => (locale === 'tr'
+  ? { label: preset.labelTr ?? preset.label, description: preset.descriptionTr ?? preset.description }
+  : { label: preset.label, description: preset.description });
+
 const requiredOutput = [{ type: 'output_not_empty' as const }];
+
+// The `open-code-review` preset below adapts the review pipeline published by Alibaba's
+// Open Code Review (https://github.com/alibaba/open-code-review, Apache-2.0): deterministic file
+// selection, rule-matched defect detection, an independent positioning pass, and a reflection pass
+// that trades recall for precision. It is a prompt workflow derived from that methodology, not a
+// binding to the `ocr` binary.
 
 const presets: WorkflowPreset[] = [
   {
     id: 'production-readiness',
     label: 'Production Readiness',
     description: 'Architecture, correctness, verification, and release-risk review before shipping.',
+    labelTr: 'Yayına Hazırlık',
+    descriptionTr: 'Yayına almadan önce mimari, doğruluk, doğrulama ve sürüm riski incelemesi.',
     workflow: {
       version: 1,
       name: 'production-readiness',
@@ -89,6 +108,8 @@ Return: (1) GO, GO WITH CONDITIONS, or NO-GO; (2) blocking findings only; (3) re
     id: 'code-review',
     label: 'Code Review',
     description: 'Intent, concrete defects, regression coverage, and prioritized review findings.',
+    labelTr: 'Kod İncelemesi',
+    descriptionTr: 'Amaç, somut kusurlar, regresyon kapsamı ve önceliklendirilmiş inceleme bulguları.',
     workflow: {
       version: 1,
       name: 'code-review',
@@ -164,6 +185,8 @@ Return only actionable findings, ordered by severity. Clearly distinguish blocke
     id: 'root-cause-debugging',
     label: 'Root Cause Debugging',
     description: 'Evidence-first diagnosis, hypothesis ranking, root-cause trace, and minimal regression-safe fix.',
+    labelTr: 'Kök Neden Hata Ayıklama',
+    descriptionTr: 'Kanıt öncelikli teşhis, hipotez sıralaması, kök neden izi ve minimum regresyon güvenli düzeltme.',
     workflow: {
       version: 1,
       name: 'root-cause-debugging',
@@ -236,6 +259,8 @@ Specify the minimal code/config/state change, why it fixes the cause rather than
     id: 'release-gate',
     label: 'Release Gate',
     description: 'Evidence-based go/no-go decision with blockers, rollback readiness, and acceptance checks.',
+    labelTr: 'Sürüm Kapısı',
+    descriptionTr: 'Engelleyiciler, geri dönüş hazırlığı ve kabul kontrolleriyle kanıta dayalı devam/dur kararı.',
     workflow: {
       version: 1,
       name: 'release-gate',
@@ -311,6 +336,8 @@ Return GO, GO WITH CONDITIONS, or NO-GO. List blockers, required final checks, r
     id: 'implementation-plan',
     label: 'Implementation Plan',
     description: 'Scope, architecture, incremental tasks, verification gates, and acceptance criteria.',
+    labelTr: 'Uygulama Planı',
+    descriptionTr: 'Kapsam, mimari, artımlı görevler, doğrulama kapıları ve kabul ölçütleri.',
     workflow: {
       version: 1,
       name: 'implementation-plan',
@@ -377,6 +404,86 @@ Task decomposition:
 {{ steps.tasks.output }}
 
 Present the ordered tasks with acceptance criteria, local verification gates, integration/end-to-end checks, rollout or migration notes, and the exact conditions for calling the work complete. Distinguish implementation completion from PR/CI/merge/release status.`,
+          assert: requiredOutput,
+        },
+      ],
+    },
+  },
+  {
+    id: 'open-code-review',
+    label: 'Open Code Review',
+    description: 'Precision-first review adapted from Alibaba Open Code Review: scope selection, specialized bug rules, line-level positioning.',
+    labelTr: 'Open Code Review',
+    descriptionTr: 'Alibaba Open Code Review\u2019dan uyarlanmış hassasiyet öncelikli inceleme: kapsam seçimi, özel hata kuralları, satır düzeyinde konumlama.',
+    workflow: {
+      version: 1,
+      name: 'open-code-review',
+      inputs: {
+        diff: { type: 'string', required: true },
+        context: { type: 'string' },
+      },
+      steps: [
+        {
+          id: 'scope',
+          type: 'chat',
+          provider: 'chatgpt',
+          prompt: `Select exactly what deserves review before looking for defects. This mirrors a deterministic file-selection stage: decide first, review second.
+
+Change:
+{{ inputs.diff }}
+
+Repository context:
+{{ inputs.context }}
+
+Produce two lists. MUST REVIEW: files whose behavior, data, contracts, or state ownership changed, with the specific reason each one matters. SKIP: generated code, vendored files, formatting-only edits, lockfiles, and unchanged reordering, with the reason. Group files that must be read together as one review unit (for example a resource file and its translation, a schema and its migration, an interface and its consumers) so a change cannot be judged in isolation. Never silently drop a file that changed behavior.`,
+          assert: requiredOutput,
+        },
+        {
+          id: 'rules',
+          type: 'chat',
+          provider: 'chatgpt',
+          prompt: `Review the MUST REVIEW set from the scope step using file-specific rule families, not generic style advice.
+
+Scope selection:
+{{ steps.scope.output }}
+
+Change:
+{{ inputs.diff }}
+
+Context:
+{{ inputs.context }}
+
+For each review unit, first state which rule families apply. Consider at minimum: null/undefined dereference and uninitialized state, concurrency and shared mutable state, injection and untrusted input (including SQL/command/template injection and XSS), resource lifecycle and cleanup, error and exception paths, integer/encoding and boundary handling, and language- or framework-specific hazards for the files involved. Then report each defect with: file, symbol, the exact code excerpt, the rule family, the concrete trigger, and the resulting incorrect behavior. Report only defects you can justify from the code in front of you; exclude style preferences and speculative concerns that lack a plausible trigger.`,
+          assert: requiredOutput,
+        },
+        {
+          id: 'position',
+          type: 'chat',
+          provider: 'chatgpt',
+          prompt: `Verify every reported finding against the real code, as an independent positioning pass.
+
+Rule-matched findings:
+{{ steps.rules.output }}
+
+Change:
+{{ inputs.diff }}
+
+For each finding, confirm the quoted code actually exists at the stated file and location. Where the location drifted or the excerpt was paraphrased, correct it or drop the finding. Where a finding depends on behavior outside the diff, say what it depends on and whether that dependency was established. Mark each surviving finding as CONFIRMED or UNPROVEN.`,
+          assert: requiredOutput,
+        },
+        {
+          id: 'reflection',
+          type: 'chat',
+          provider: 'chatgpt',
+          prompt: `Reflect on each confirmed finding and keep only real defects, deliberately trading recall for precision.
+
+Rule-matched findings:
+{{ steps.rules.output }}
+
+Positioned findings:
+{{ steps.position.output }}
+
+For each finding, argue the strongest reason it might not be a real defect. Drop it if that reason holds; keep it only when the failure can actually occur. Return the surviving findings ordered by severity (blocker, then non-blocking), each with file, location, why it is a real defect, and the smallest correct fix. If nothing survives, say so explicitly instead of inventing a finding, and end with the minimum verification the change still needs.`,
           assert: requiredOutput,
         },
       ],

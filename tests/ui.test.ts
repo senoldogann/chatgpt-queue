@@ -280,6 +280,7 @@ describe('QueuePanel', () => {
       'Root Cause Debugging',
       'Release Gate',
       'Implementation Plan',
+      'Open Code Review',
     ]);
     expect(root.querySelector('[data-role="workflow-preset-description"]')?.textContent).toContain('Choose a proven local workflow');
     expect(root.querySelector('[data-role="workflow-file"]')).not.toBeNull();

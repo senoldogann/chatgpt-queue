@@ -1,10 +1,11 @@
 import type { AdapterInterfaceReport } from '../adapter/chatgpt-adapter';
 import type { ContextPressure } from '../context/pressure';
-import { formatContextPressure } from '../context/pressure';
 import type { ConversationQueue, QueueItem } from '../domain/types';
 import type { WorkflowRun } from '../flowrun/events';
-import { WORKFLOW_PRESETS } from '../flowrun/presets';
+import { WORKFLOW_PRESETS, localizedPresetText } from '../flowrun/presets';
 import type { WorkflowDefinition } from '../flowrun/schema';
+import { GUIDE_STEP_COUNT, GUIDE_STEPS, clampGuideIndex } from './guide';
+import { createTranslator, translate, type Locale, type LocalePreference, type MessageKey, type Translator } from './i18n';
 
 type MaybePromise = void | Promise<void>;
 
@@ -24,6 +25,7 @@ export interface QueuePanelActions {
   prepareHandoff?: () => MaybePromise;
   openHandoff?: () => MaybePromise;
   setContextCapacity?: (tokens: number | null) => MaybePromise;
+  setLocale?: (preference: LocalePreference) => MaybePromise;
 }
 
 export interface QueuePanelContextView {
@@ -39,15 +41,18 @@ export interface QueuePanelContextView {
   };
 }
 
-export interface QueuePanelWorkflowView {
+export interface QueuePanelView {
   workflow?: WorkflowDefinition;
   run?: WorkflowRun;
   error?: string;
   bridgeState?: 'disabled' | 'enabling' | 'connected' | 'disconnected';
   context?: QueuePanelContextView;
+  locale?: Locale;
+  localePreference?: LocalePreference;
 }
 
 const PANEL_COLLAPSED_KEY = 'chatgpt-queue:panel-collapsed';
+const LOCALE_PREFERENCE_VALUES: readonly LocalePreference[] = ['auto', 'en', 'tr'];
 
 const escapeHtml = (value: string): string => value
   .replaceAll('&', '&amp;')
@@ -56,91 +61,47 @@ const escapeHtml = (value: string): string => value
   .replaceAll('"', '&quot;')
   .replaceAll("'", '&#039;');
 
-const statusLabel = (status: ConversationQueue['status']) => `${status.charAt(0).toUpperCase()}${status.slice(1)}`;
-
-const stateMark = (item: QueueItem): string => {
-  if (item.state === 'completed') return '✓';
-  if (item.state === 'running' || item.state === 'sending') return '●';
-  return '○';
-};
-
-const readCollapsedPreference = (): boolean => {
+const readSessionFlag = (key: string): boolean => {
   try {
-    return sessionStorage.getItem(PANEL_COLLAPSED_KEY) === '1';
+    return sessionStorage.getItem(key) === '1';
   } catch {
     return false;
   }
 };
 
-const writeCollapsedPreference = (collapsed: boolean): void => {
+const writeSessionFlag = (key: string, value: boolean): void => {
   try {
-    sessionStorage.setItem(PANEL_COLLAPSED_KEY, collapsed ? '1' : '0');
+    sessionStorage.setItem(key, value ? '1' : '0');
   } catch {
     // Session storage is best-effort; panel behavior must not depend on it.
   }
 };
 
-const visualSignature = (queue: ConversationQueue, notice: string | undefined, workflowView: QueuePanelWorkflowView): string => JSON.stringify({
-  conversationKey: queue.conversationKey,
-  status: queue.status,
-  blockedReason: queue.blockedReason ?? null,
-  notice: notice ?? null,
-  items: queue.items.map((item) => ({ id: item.id, content: item.content, state: item.state })),
-  workflow: workflowView.workflow ? {
-    name: workflowView.workflow.name,
-    inputs: workflowView.workflow.inputs,
-    steps: workflowView.workflow.steps.map((step) => step.id),
-  } : null,
-  run: workflowView.run ? {
-    id: workflowView.run.id,
-    status: workflowView.run.status,
-    steps: workflowView.run.steps.map((step) => ({ id: step.id, status: step.status, error: step.error ?? null })),
-  } : null,
-  workflowError: workflowView.error ?? null,
-  bridgeState: workflowView.bridgeState ?? 'disabled',
-  context: workflowView.context ? {
-    pressure: workflowView.context.pressure
-      ? {
-          level: workflowView.context.pressure.level,
-          percent: Math.round(workflowView.context.pressure.ratio * 100),
-          estimatedTokens: workflowView.context.pressure.estimatedTokens,
-          capacityTokens: workflowView.context.pressure.capacity.usableTokens,
-        }
-      : null,
-    capacityOverride: workflowView.context.capacityOverride ?? null,
-    handoffStatus: workflowView.context.handoff?.status ?? 'none',
-    carriedItems: workflowView.context.handoff?.carriedItems ?? 0,
-    adapter: workflowView.context.adapter
-      ? {
-          health: workflowView.context.adapter.report.health,
-          recognized: workflowView.context.adapter.report.recognized,
-          isGenerating: workflowView.context.adapter.report.isGenerating,
-          composerReady: workflowView.context.adapter.report.composerReady,
-          blockingReason: workflowView.context.adapter.report.blockingReason,
-          confirmationVisible: workflowView.context.adapter.report.confirmationVisible,
-          sendControl: workflowView.context.adapter.report.sendControl.status,
-          stopControl: workflowView.context.adapter.report.stopControl.status,
-          transcript: workflowView.context.adapter.report.transcript.status,
-          assistantTurn: workflowView.context.adapter.report.assistantTurn.status,
-        }
-      : null,
-  } : null,
-});
-
 export class QueuePanel {
   private readonly root: ShadowRoot;
   private lastConversationKey?: string;
   private lastVisualSignature?: string;
+  private lastRenderArgs?: [ConversationQueue, string | undefined, QueuePanelView];
   private selectedPresetId = '';
   private adapterDetailsOpen = false;
-  private collapsed = readCollapsedPreference();
+  private guideIndex: number | null = null;
+  private collapsed = readSessionFlag(PANEL_COLLAPSED_KEY);
 
   constructor(private readonly host: HTMLElement, private readonly actions: QueuePanelActions) {
     this.root = host.shadowRoot ?? host.attachShadow({ mode: 'open' });
   }
 
-  render(queue: ConversationQueue, notice?: string, workflowView: QueuePanelWorkflowView = {}): void {
-    const signature = visualSignature(queue, notice, workflowView);
+  /** Re-renders the last view, used when panel-local state (the guide) changes. */
+  private refresh(): void {
+    if (!this.lastRenderArgs) return;
+    this.render(...this.lastRenderArgs);
+  }
+
+  render(queue: ConversationQueue, notice?: string, view: QueuePanelView = {}): void {
+    this.lastRenderArgs = [queue, notice, view];
+    const locale: Locale = view.locale ?? 'en';
+    const t = createTranslator(locale);
+    const signature = visualSignature(queue, notice, view, this.guideIndex);
     if (signature === this.lastVisualSignature) return;
 
     const sameConversation = this.lastConversationKey === queue.conversationKey;
@@ -175,11 +136,11 @@ export class QueuePanel {
 
     const pending = queue.items.filter((item) => item.state === 'queued').length;
     const control = queue.status === 'running'
-      ? '<button class="primary" data-action="pause">Pause</button>'
+      ? `<button class="primary" data-action="pause">${escapeHtml(t('action.pause'))}</button>`
       : queue.status === 'paused' || queue.status === 'blocked'
-        ? '<button class="primary" data-action="resume">Resume</button>'
+        ? `<button class="primary" data-action="resume">${escapeHtml(t('action.resume'))}</button>`
         : pending > 0
-          ? '<button class="primary" data-action="start">Start queue</button>'
+          ? `<button class="primary" data-action="start">${escapeHtml(t('action.start'))}</button>`
           : '';
 
     const rows = queue.items.map((item) => {
@@ -187,37 +148,40 @@ export class QueuePanel {
         return `<li class="item queued">
           <div class="item-head">
             <span class="mark">${stateMark(item)}</span>
-            <span class="item-state">Queued</span>
+            <span class="item-state">${escapeHtml(t('item.queued'))}</span>
           </div>
-          <textarea data-item-id="${escapeHtml(item.id)}" aria-label="Queued message">${escapeHtml(item.content)}</textarea>
+          <textarea data-item-id="${escapeHtml(item.id)}" aria-label="${escapeHtml(t('item.draftLabel'))}">${escapeHtml(item.content)}</textarea>
           <div class="row-actions">
-            <button class="icon" data-action="up" data-id="${escapeHtml(item.id)}" title="Move up" aria-label="Move up">↑</button>
-            <button class="icon" data-action="down" data-id="${escapeHtml(item.id)}" title="Move down" aria-label="Move down">↓</button>
-            <button data-action="save" data-id="${escapeHtml(item.id)}">Save</button>
-            <button class="danger" data-action="delete" data-id="${escapeHtml(item.id)}">Delete</button>
+            <button class="icon" data-action="up" data-id="${escapeHtml(item.id)}" title="${escapeHtml(t('action.moveUp'))}" aria-label="${escapeHtml(t('action.moveUp'))}">↑</button>
+            <button class="icon" data-action="down" data-id="${escapeHtml(item.id)}" title="${escapeHtml(t('action.moveDown'))}" aria-label="${escapeHtml(t('action.moveDown'))}">↓</button>
+            <button data-action="save" data-id="${escapeHtml(item.id)}">${escapeHtml(t('action.save'))}</button>
+            <button class="danger" data-action="delete" data-id="${escapeHtml(item.id)}">${escapeHtml(t('action.delete'))}</button>
           </div>
         </li>`;
       }
       return `<li class="item compact ${item.state}">
         <span class="mark">${stateMark(item)}</span>
         <span class="item-copy">${escapeHtml(item.content)}</span>
-        <span class="item-state">${escapeHtml(item.state)}</span>
+        <span class="item-state">${escapeHtml(t(itemStateKey(item.state)))}</span>
       </li>`;
     }).join('');
 
+    // The raw code stays in the notice so a report or a log search still matches it; the human
+    // sentence is added only when the code is known, so an unmapped code is never printed twice.
+    const blockedReasonText = queue.blockedReason === undefined ? '' : describeReason(locale, queue.blockedReason);
     const blocked = queue.blockedReason
-      ? `<div class="notice danger-notice"><strong>Blocked:</strong> ${escapeHtml(queue.blockedReason)}</div>`
+      ? `<div class="notice danger-notice"><strong>${escapeHtml(t('notice.blocked'))}:</strong> <code>${escapeHtml(queue.blockedReason)}</code>${blockedReasonText === queue.blockedReason ? '' : ` — ${escapeHtml(blockedReasonText)}`}</div>`
       : '';
     const localNotice = notice
-      ? `<div class="notice"><strong>Notice:</strong> ${escapeHtml(notice)}</div>`
+      ? `<div class="notice"><strong>${escapeHtml(t('notice.notice'))}:</strong> ${escapeHtml(notice)}</div>`
       : '';
 
-    const workflow = workflowView.workflow;
-    const flowRun = workflowView.run;
+    const workflow = view.workflow;
+    const flowRun = view.run;
     const queueBusy = queue.items.some((item) => ['queued', 'sending', 'running'].includes(item.state));
     const flowRunRunning = flowRun?.status === 'running';
     const isActive = queue.status === 'running' || flowRunRunning;
-    const bridgeState = workflowView.bridgeState ?? 'disabled';
+    const bridgeState = view.bridgeState ?? 'disabled';
     const completedSteps = flowRun?.steps.filter((step) => step.status === 'completed').length ?? 0;
     const activeStep = flowRun?.steps.find((step) => ['ready', 'dispatching', 'waiting', 'blocked', 'failed'].includes(step.status))
       ?? flowRun?.steps.find((step) => step.status === 'pending');
@@ -230,102 +194,126 @@ export class QueuePanel {
     const workflowRunSummary = flowRun
       ? `<div class="workflow-run workflow-run-${escapeHtml(flowRun.status)}">
           <div class="workflow-run-line">
-            <strong>${escapeHtml(statusLabel(flowRun.status as ConversationQueue['status']))}</strong>
-            <span>${completedSteps} / ${flowRun.steps.length}</span>
+            <strong>${escapeHtml(t(`status.${flowRun.status}` as MessageKey))}</strong>
+            <span>${escapeHtml(t('workflow.progress', { done: completedSteps, total: flowRun.steps.length }))}</span>
             ${activeStep ? `<span>${escapeHtml(activeStep.id)}</span>` : ''}
           </div>
           ${activeStep?.error ? `<div class="workflow-error">${escapeHtml(activeStep.error)}</div>` : ''}
         </div>`
       : '';
-    const workflowError = workflowView.error
-      ? `<div class="notice danger-notice"><strong>Workflow:</strong> ${escapeHtml(workflowView.error)}</div>`
+    const workflowError = view.error
+      ? `<div class="notice danger-notice"><strong>${escapeHtml(t('workflow.title'))}:</strong> ${escapeHtml(view.error)}</div>`
       : '';
     const selectedPreset = WORKFLOW_PRESETS.find((preset) => preset.id === this.selectedPresetId);
-    const workflowPresetOptions = WORKFLOW_PRESETS.map((preset) =>
-      `<option value="${escapeHtml(preset.id)}" data-description="${escapeHtml(preset.description)}"${preset.id === selectedPreset?.id ? ' selected' : ''}>${escapeHtml(preset.label)}</option>`
-    ).join('');
-    const workflowPresetDescription = selectedPreset?.description
-      ?? 'Choose a proven local workflow and review its inputs before running.';
+    const workflowPresetOptions = WORKFLOW_PRESETS.map((preset) => {
+      const text = localizedPresetText(preset, locale);
+      return `<option value="${escapeHtml(preset.id)}" data-description="${escapeHtml(text.description)}"${preset.id === selectedPreset?.id ? ' selected' : ''}>${escapeHtml(text.label)}</option>`;
+    }).join('');
+    const workflowPresetDescription = selectedPreset
+      ? localizedPresetText(selectedPreset, locale).description
+      : t('workflow.defaultDescription');
     const workflowSection = workflow
       ? `<section class="workflow-section">
           <div class="workflow-heading">
-            <div><strong>Workflow</strong><span class="workflow-subtitle">FlowRun</span></div>
-            <button class="ghost" data-action="clear-workflow">Clear</button>
+            <div><strong>${escapeHtml(t('workflow.title'))}</strong><span class="workflow-subtitle">${escapeHtml(t('workflow.subtitle'))}</span></div>
+            <button class="ghost" data-action="clear-workflow">${escapeHtml(t('action.clear'))}</button>
           </div>
-          <div class="workflow-meta"><strong>${escapeHtml(workflow.name)}</strong><span>${workflow.steps.length} steps</span></div>
+          <div class="workflow-meta"><strong>${escapeHtml(workflow.name)}</strong><span>${escapeHtml(t('workflow.stepsCount', { count: workflow.steps.length }))}</span></div>
           ${workflowInputs ? `<div class="workflow-inputs">${workflowInputs}</div>` : ''}
           ${workflowRunSummary}
           ${workflowError}
-          ${queueBusy ? '<div class="workflow-hint">Finish or clear the current queue before starting a workflow.</div>' : ''}
-          <button class="primary workflow-run-button" data-action="run-workflow"${queueBusy || flowRunRunning ? ' disabled' : ''}>Run workflow</button>
+          ${queueBusy ? `<div class="workflow-hint">${escapeHtml(t('workflow.busyHint'))}</div>` : ''}
+          <button class="primary workflow-run-button" data-action="run-workflow"${queueBusy || flowRunRunning ? ' disabled' : ''}>${escapeHtml(t('action.runWorkflow'))}</button>
         </section>`
       : `<section class="workflow-section">
-          <div class="workflow-heading"><div><strong>Workflow</strong><span class="workflow-subtitle">FlowRun</span></div></div>
+          <div class="workflow-heading"><div><strong>${escapeHtml(t('workflow.title'))}</strong><span class="workflow-subtitle">${escapeHtml(t('workflow.subtitle'))}</span></div></div>
           ${workflowRunSummary}
           ${workflowError}
           <div class="workflow-preset-picker">
-            <span class="workflow-preset-label">Built-in workflows</span>
+            <span class="workflow-preset-label">${escapeHtml(t('workflow.builtinLabel'))}</span>
             <div class="workflow-preset-row">
-              <select data-role="workflow-preset" aria-label="Workflow preset">
-                <option value="">Choose a built-in workflow</option>
+              <select data-role="workflow-preset" aria-label="${escapeHtml(t('workflow.builtinLabel'))}">
+                <option value="">${escapeHtml(t('workflow.choosePlaceholder'))}</option>
                 ${workflowPresetOptions}
               </select>
-              <button class="ghost" data-action="load-workflow-preset"${selectedPreset ? '' : ' disabled'}>Use preset</button>
+              <button class="ghost" data-action="load-workflow-preset"${selectedPreset ? '' : ' disabled'}>${escapeHtml(t('action.usePreset'))}</button>
             </div>
             <div class="workflow-preset-description" data-role="workflow-preset-description">${escapeHtml(workflowPresetDescription)}</div>
           </div>
-          <div class="workflow-divider"><span>or</span></div>
-          <label class="workflow-file-button">Load custom workflow<input data-role="workflow-file" type="file" accept=".json,.flowrun.json,application/json" /></label>
+          <div class="workflow-divider"><span>${escapeHtml(t('workflow.or'))}</span></div>
+          <label class="workflow-file-button">${escapeHtml(t('workflow.loadCustom'))}<input data-role="workflow-file" type="file" accept=".json,.flowrun.json,application/json" /></label>
         </section>`;
+    const bridgeStateLabel = bridgeState === 'connected'
+      ? t('bridge.connected')
+      : bridgeState === 'enabling'
+        ? t('bridge.enabling')
+        : bridgeState === 'disconnected'
+          ? t('bridge.disconnected')
+          : t('bridge.disabled');
     const bridgeControl = bridgeState === 'connected'
-      ? '<div class="bridge-row"><span>CLI bridge</span><span class="bridge-state connected">Connected</span></div>'
-      : `<div class="bridge-row"><span>CLI bridge</span><span class="bridge-state">${bridgeState === 'enabling' ? 'Enabling…' : bridgeState === 'disconnected' ? 'Disconnected' : 'Disabled'}</span><button class="ghost" data-action="enable-bridge"${bridgeState === 'enabling' ? ' disabled' : ''}>${bridgeState === 'disabled' ? 'Enable' : 'Reconnect'}</button></div>`;
+      ? `<div class="bridge-row"><span>${escapeHtml(t('bridge.label'))}</span><span class="bridge-state connected">${escapeHtml(bridgeStateLabel)}</span></div>`
+      : `<div class="bridge-row"><span>${escapeHtml(t('bridge.label'))}</span><span class="bridge-state">${escapeHtml(bridgeStateLabel)}</span><button class="ghost" data-action="enable-bridge"${bridgeState === 'enabling' ? ' disabled' : ''}>${escapeHtml(bridgeState === 'disabled' ? t('action.enable') : t('action.reconnect'))}</button></div>`;
 
-    const contextView = workflowView.context ?? {};
+    const contextView = view.context ?? {};
     const pressure = contextView.pressure;
     const adapterView = contextView.adapter;
     const adapterHealth = adapterView?.report.health ?? 'unrecognized';
     const meterWidth = pressure ? Math.max(0, Math.min(100, Math.round(pressure.ratio * 100))) : 0;
+    const pressureText = pressure
+      ? t('context.pressure', {
+          percent: Math.round(pressure.ratio * 100),
+          capacity: pressure.capacity.usableTokens.toLocaleString('en-US'),
+          estimated: pressure.estimatedTokens.toLocaleString('en-US'),
+          turns: pressure.turnCount,
+          source: pressure.capacity.label.toLowerCase(),
+        })
+      : '';
     const handoffStatus = contextView.handoff?.status ?? 'none';
     const handoffCarried = contextView.handoff?.carriedItems ?? 0;
     const queueActivelySending = queue.status === 'running' || queue.items.some((item) => item.state === 'sending' || item.state === 'running');
     const handoffBlocked = queueActivelySending || flowRunRunning || adapterHealth !== 'ok';
     const adapterChipLabel = adapterHealth === 'ok'
-      ? 'interface ok'
+      ? t('adapter.ok')
       : adapterHealth === 'degraded'
-        ? 'interface degraded'
-        : 'interface unrecognized';
+        ? t('adapter.degraded')
+        : t('adapter.unrecognized');
     const handoffControl = handoffStatus === 'capturing'
-      ? '<span class="handoff-state">Preparing handoff brief…</span>'
+      ? `<span class="handoff-state">${escapeHtml(t('handoff.preparing'))}</span>`
       : handoffStatus === 'ready'
-        ? `<span class="handoff-state ready">Handoff ready · ${handoffCarried} item${handoffCarried === 1 ? '' : 's'} carried</span>
-           <button class="primary" data-action="open-handoff">Continue in new chat</button>`
-        : `<button data-action="prepare-handoff"${handoffBlocked ? ' disabled' : ''}>Compact &amp; continue</button>
-           <span class="handoff-hint">${adapterHealth !== 'ok'
-             ? 'The adapter must recognize this page before a handoff can be prepared.'
+        ? `<span class="handoff-state ready">${escapeHtml(handoffCarried === 1 ? t('handoff.readyOne') : t('handoff.ready', { count: handoffCarried }))}</span>
+           <button class="primary" data-action="open-handoff">${escapeHtml(t('handoff.open'))}</button>`
+        : `<button data-action="prepare-handoff"${handoffBlocked ? ' disabled' : ''}>${escapeHtml(t('handoff.prepare'))}</button>
+           <span class="handoff-hint">${escapeHtml(adapterHealth !== 'ok'
+             ? t('handoff.hintAdapter')
              : handoffBlocked
-               ? 'Available once the queue is idle. Queued follow-ups are carried over.'
-               : 'Asks ChatGPT for a handoff brief, then opens a fresh chat with it.'}</span>`;
+               ? t('handoff.hintBusy')
+               : t('handoff.hintReady'))}</span>`;
     const contextSection = `<section class="context-section">
       <div class="context-heading">
-        <div><strong>Context</strong><span class="context-subtitle">local estimate</span></div>
-        <span class="adapter-chip adapter-${adapterHealth}" data-role="adapter-health">${adapterChipLabel}</span>
+        <div><strong>${escapeHtml(t('context.title'))}</strong><span class="context-subtitle">${escapeHtml(t('context.subtitle'))}</span></div>
+        <span class="adapter-chip adapter-${adapterHealth}" data-role="adapter-health">${escapeHtml(adapterChipLabel)}</span>
       </div>
       ${pressure
         ? `<div class="meter" aria-hidden="true"><div class="meter-fill level-${pressure.level}" style="width:${meterWidth}%"></div></div>
-           <div class="meter-detail" data-role="context-detail">${escapeHtml(formatContextPressure(pressure))}</div>`
-        : '<div class="meter-detail">Context pressure unavailable.</div>'}
+           <div class="meter-detail" data-role="context-detail">${escapeHtml(pressureText)}</div>`
+        : `<div class="meter-detail">${escapeHtml(t('context.unavailable'))}</div>`}
       ${adapterView
-        ? `<button class="ghost context-disclosure" data-action="toggle-adapter-detail">Interface detail</button>
+        ? `<button class="ghost context-disclosure" data-action="toggle-adapter-detail">${escapeHtml(t('context.interfaceDetail'))}</button>
            <pre class="adapter-detail" data-role="adapter-detail"${this.adapterDetailsOpen ? '' : ' hidden'}>${escapeHtml(adapterView.diagnostics)}</pre>`
         : ''}
       <div class="handoff-row">${handoffControl}</div>
       <label class="capacity-row">
-        <span>Capacity override (tokens)</span>
-        <input type="number" min="1000" step="1000" inputmode="numeric" data-role="context-capacity" placeholder="auto" value="${contextView.capacityOverride === undefined ? '' : String(contextView.capacityOverride)}" />
+        <span>${escapeHtml(t('context.capacityLabel'))}</span>
+        <input type="number" min="1000" step="1000" inputmode="numeric" data-role="context-capacity" placeholder="${escapeHtml(t('context.capacityPlaceholder'))}" value="${contextView.capacityOverride === undefined ? '' : String(contextView.capacityOverride)}" />
       </label>
     </section>`;
 
+    const localePreference = view.localePreference ?? 'auto';
+    const localeOptions = LOCALE_PREFERENCE_VALUES.map((value) => {
+      const label = value === 'auto' ? t('locale.auto') : value.toUpperCase();
+      return `<option value="${value}"${value === localePreference ? ' selected' : ''}>${escapeHtml(label)}</option>`;
+    }).join('');
+    const guideCard = this.renderGuide(t);
 
     this.root.innerHTML = `
       <style>
@@ -407,7 +395,7 @@ export class QueuePanel {
           color: #ddd;
           font-size: 12px;
         }
-        .header-actions { display: flex; align-items: center; gap: 8px; }
+        .header-actions { display: flex; align-items: center; gap: 6px; }
         .status {
           display: inline-flex;
           align-items: center;
@@ -478,6 +466,18 @@ export class QueuePanel {
         textarea:focus, input[type="text"]:focus {
           border-color: rgba(255,255,255,.38);
           box-shadow: 0 0 0 3px rgba(255,255,255,.06);
+        }
+        .locale-select {
+          min-height: 28px;
+          max-width: 78px;
+          border: 1px solid rgba(255,255,255,.14);
+          border-radius: 8px;
+          outline: none;
+          background: #232323;
+          color: #e8e8e8;
+          padding: 2px 4px;
+          font: inherit;
+          font-size: 11px;
         }
         .composer {
           display: grid;
@@ -606,6 +606,7 @@ export class QueuePanel {
           border-top: 1px solid rgba(255,255,255,.1);
           display: grid;
           gap: 8px;
+          border-radius: 12px;
         }
         .context-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
         .context-heading > div { display: flex; align-items: baseline; gap: 7px; }
@@ -668,6 +669,37 @@ export class QueuePanel {
           border-color: rgba(255,255,255,.38);
           box-shadow: 0 0 0 3px rgba(255,255,255,.06);
         }
+        .guide-card {
+          position: relative;
+          margin-bottom: 10px;
+          padding: 11px 12px 12px;
+          border: 1px solid rgba(140,190,255,.32);
+          border-radius: 12px;
+          background: linear-gradient(180deg, rgba(52,72,104,.55), rgba(38,48,66,.55));
+          box-shadow: 0 0 0 3px rgba(120,170,255,.07);
+          outline: none;
+        }
+        .guide-head { display: flex; align-items: center; gap: 8px; }
+        .guide-head strong { flex: 1; font-size: 12px; }
+        .guide-progress-text { color: #b9cbe6; font-size: 11px; }
+        .guide-dots { display: flex; gap: 5px; margin: 8px 0 10px; }
+        .guide-dot {
+          width: 100%;
+          height: 4px;
+          border-radius: 999px;
+          background: rgba(255,255,255,.16);
+          transition: background .18s ease;
+        }
+        .guide-dot.done { background: rgba(160,200,255,.5); }
+        .guide-dot.active { background: #cfe2ff; }
+        .guide-step-title { display: block; margin-bottom: 5px; font-size: 12.5px; }
+        .guide-step-body { margin: 0; color: #dbe4f0; font-size: 12px; line-height: 1.5; }
+        .guide-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 11px; }
+        .guide-highlight {
+          box-shadow: 0 0 0 2px rgba(150,195,255,.75), 0 0 0 6px rgba(150,195,255,.16);
+          border-radius: 10px;
+          transition: box-shadow .18s ease;
+        }
         @media (max-width: 520px) {
           .dock { right: 8px; bottom: 8px; width: calc(100vw - 16px); }
           .body { max-height: 58vh; }
@@ -676,32 +708,35 @@ export class QueuePanel {
         }
       </style>
       <div class="dock${this.collapsed ? ' collapsed' : ''}">
-        <section class="panel" aria-label="ChatGPT Queue">
+        <section class="panel" aria-label="${escapeHtml(t('app.title'))}">
           <header class="header">
             <div class="title-group">
-              <span class="title">Queue</span>
+              <span class="title">${escapeHtml(t('app.title'))}</span>
               <span class="count">${pending}</span>
             </div>
             <div class="header-actions">
-              <span class="status status-${escapeHtml(queue.status)}${isActive ? ' activity' : ''}">${isActive ? '<span class="activity-spinner" data-role="activity-spinner" aria-label="Queue running"></span>' : ''}${statusLabel(queue.status)}</span>
-              <button class="ghost icon" data-action="hide" aria-label="Hide queue" title="Hide queue">→</button>
+              <span class="status status-${escapeHtml(queue.status)}${isActive ? ' activity' : ''}">${isActive ? `<span class="activity-spinner" data-role="activity-spinner" aria-label="${escapeHtml(t('status.running'))}"></span>` : ''}${escapeHtml(t(`status.${queue.status}` as MessageKey))}</span>
+              <button class="ghost icon" data-action="open-guide" aria-label="${escapeHtml(t('guide.open'))}" title="${escapeHtml(t('guide.open'))}">?</button>
+              <select class="locale-select" data-role="locale" aria-label="${escapeHtml(t('locale.label'))}" title="${escapeHtml(t('locale.label'))}">${localeOptions}</select>
+              <button class="ghost icon" data-action="hide" aria-label="${escapeHtml(t('app.hide'))}" title="${escapeHtml(t('app.hide'))}">→</button>
             </div>
           </header>
           <div class="body">
+            ${guideCard}
             <div class="toolbar">${control}<span class="spacer"></span></div>
             ${blocked}
             ${localNotice}
             <div class="composer">
-              <textarea data-role="new-message" placeholder="Add follow-up message" aria-label="Add follow-up message"></textarea>
-              <button data-action="add">Add</button>
+              <textarea data-role="new-message" placeholder="${escapeHtml(t('item.newMessagePlaceholder'))}" aria-label="${escapeHtml(t('item.newMessageLabel'))}"></textarea>
+              <button data-action="add">${escapeHtml(t('action.add'))}</button>
             </div>
-            ${rows ? `<ul>${rows}</ul>` : '<div class="empty">No queued messages.</div>'}
+            ${rows ? `<ul>${rows}</ul>` : `<div class="empty">${escapeHtml(t('list.empty'))}</div>`}
             ${contextSection}
             ${workflowSection}
             ${bridgeControl}
           </div>
         </section>
-        <button class="peek" data-action="show" aria-label="Show queue">${isActive ? '<span class="activity-spinner" data-role="activity-spinner-collapsed" aria-hidden="true"></span>' : ''}<span>‹</span><strong>Queue · ${pending}</strong></button>
+        <button class="peek" data-action="show" aria-label="${escapeHtml(t('app.show'))}">${isActive ? '<span class="activity-spinner" data-role="activity-spinner-collapsed" aria-hidden="true"></span>' : ''}<span>‹</span><strong>${escapeHtml(t('app.collapsedLabel', { count: pending }))}</strong></button>
       </div>`;
 
     if (sameConversation) {
@@ -738,12 +773,80 @@ export class QueuePanel {
         focusTarget.setSelectionRange(selectionStart, selectionEnd);
       }
     }
+
+    this.applyGuide();
+  }
+
+  private renderGuide(t: Translator): string {
+    if (this.guideIndex === null) return '';
+    const activeIndex = this.guideIndex;
+    const step = GUIDE_STEPS[activeIndex];
+    if (!step) return '';
+    const dots = GUIDE_STEPS.map((_entry, index) =>
+      `<span class="guide-dot${index === activeIndex ? ' active' : ''}${index < activeIndex ? ' done' : ''}"></span>`
+    ).join('');
+    const isLast = activeIndex === GUIDE_STEP_COUNT - 1;
+
+    return `<section class="guide-card" data-role="guide-card" tabindex="-1" role="dialog" aria-label="${escapeHtml(t('guide.title'))}">
+      <div class="guide-head">
+        <strong>${escapeHtml(t('guide.title'))}</strong>
+        <span class="guide-progress-text">${escapeHtml(t('guide.progress', { current: this.guideIndex + 1, total: GUIDE_STEP_COUNT }))}</span>
+        <button class="ghost icon" data-action="close-guide" aria-label="${escapeHtml(t('action.close'))}" title="${escapeHtml(t('action.close'))}">✕</button>
+      </div>
+      <div class="guide-dots" aria-hidden="true">${dots}</div>
+      <div class="guide-body">
+        <strong class="guide-step-title">${escapeHtml(t(step.title))}</strong>
+        <p class="guide-step-body">${escapeHtml(t(step.body))}</p>
+      </div>
+      <div class="guide-actions">
+        <button class="ghost" data-action="guide-prev"${this.guideIndex === 0 ? ' disabled' : ''}>${escapeHtml(t('action.back'))}</button>
+        <button class="primary" data-action="guide-next">${escapeHtml(isLast ? t('action.finish') : t('action.next'))}</button>
+      </div>
+    </section>`;
+  }
+
+  /** Highlights whatever the current guide step is talking about, without touching the guide card. */
+  private applyGuide(): void {
+    for (const node of this.root.querySelectorAll('.guide-highlight')) node.classList.remove('guide-highlight');
+    if (this.guideIndex === null) return;
+    const step = GUIDE_STEPS[this.guideIndex];
+    if (!step) return;
+    const selectors = [step.target, ...(step.fallbackTargets ?? [])];
+    for (const selector of selectors) {
+      const target = this.root.querySelector<HTMLElement>(selector);
+      if (!target) continue;
+      target.classList.add('guide-highlight');
+      target.scrollIntoView?.({ block: 'nearest' });
+      return;
+    }
   }
 
   private setCollapsed(collapsed: boolean): void {
     this.collapsed = collapsed;
-    writeCollapsedPreference(collapsed);
+    writeSessionFlag(PANEL_COLLAPSED_KEY, collapsed);
     this.root.querySelector('.dock')?.classList.toggle('collapsed', collapsed);
+  }
+
+  private openGuide(): void {
+    this.guideIndex = 0;
+    this.refresh();
+    this.root.querySelector<HTMLElement>('[data-role="guide-card"]')?.focus();
+  }
+
+  private closeGuide(): void {
+    this.guideIndex = null;
+    this.refresh();
+  }
+
+  private guideStep(delta: number): void {
+    if (this.guideIndex === null) return;
+    const next = this.guideIndex + delta;
+    if (next >= GUIDE_STEP_COUNT) {
+      this.closeGuide();
+      return;
+    }
+    this.guideIndex = clampGuideIndex(next);
+    this.refresh();
   }
 
   private bind(): void {
@@ -753,6 +856,28 @@ export class QueuePanel {
 
     this.root.querySelector('[data-action="hide"]')?.addEventListener('click', () => this.setCollapsed(true));
     this.root.querySelector('[data-action="show"]')?.addEventListener('click', () => this.setCollapsed(false));
+
+    this.root.querySelector('[data-action="open-guide"]')?.addEventListener('click', () => this.openGuide());
+    this.root.querySelector('[data-action="close-guide"]')?.addEventListener('click', () => this.closeGuide());
+    this.root.querySelector('[data-action="guide-prev"]')?.addEventListener('click', () => this.guideStep(-1));
+    this.root.querySelector('[data-action="guide-next"]')?.addEventListener('click', () => this.guideStep(1));
+    this.root.querySelector<HTMLElement>('[data-role="guide-card"]')?.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        this.closeGuide();
+      } else if (event.key === 'ArrowRight') {
+        event.preventDefault();
+        this.guideStep(1);
+      } else if (event.key === 'ArrowLeft') {
+        event.preventDefault();
+        this.guideStep(-1);
+      }
+    });
+
+    this.root.querySelector<HTMLSelectElement>('[data-role="locale"]')?.addEventListener('change', (event) => {
+      const value = (event.currentTarget as HTMLSelectElement).value as LocalePreference;
+      if (this.actions.setLocale) invoke(() => this.actions.setLocale!(value));
+    });
 
     this.root.querySelector<HTMLButtonElement>('[data-action="add"]')?.addEventListener('click', () => {
       const input = this.root.querySelector<HTMLTextAreaElement>('[data-role="new-message"]');
@@ -783,7 +908,7 @@ export class QueuePanel {
       this.selectedPresetId = workflowPreset.value;
       if (workflowPresetDescription) {
         workflowPresetDescription.textContent = option?.dataset.description
-          ?? 'Choose a proven local workflow and review its inputs before running.';
+          ?? translate(this.localeOfLastRender(), 'workflow.defaultDescription');
       }
       if (workflowPresetButton) workflowPresetButton.disabled = workflowPreset.value.length === 0;
     });
@@ -843,4 +968,78 @@ export class QueuePanel {
       });
     }
   }
+
+  private localeOfLastRender(): Locale {
+    return this.lastRenderArgs?.[2]?.locale ?? 'en';
+  }
 }
+
+const itemStateKey = (state: QueueItem['state']): MessageKey => `item.${state}` as MessageKey;
+
+const stateMark = (item: QueueItem): string => {
+  if (item.state === 'completed') return '✓';
+  if (item.state === 'running' || item.state === 'sending') return '●';
+  return '○';
+};
+
+/** Known fail-closed codes are explained in the panel language; unknown codes fall back to the code. */
+const describeReason = (locale: Locale, code: string): string => {
+  const key = `reason.${code}` as MessageKey;
+  const translated = translate(locale, key);
+  return translated === key ? code : translated;
+};
+
+const visualSignature = (
+  queue: ConversationQueue,
+  notice: string | undefined,
+  view: QueuePanelView,
+  guideIndex: number | null,
+): string => JSON.stringify({
+  conversationKey: queue.conversationKey,
+  status: queue.status,
+  blockedReason: queue.blockedReason ?? null,
+  notice: notice ?? null,
+  items: queue.items.map((item) => ({ id: item.id, content: item.content, state: item.state })),
+  workflow: view.workflow ? {
+    name: view.workflow.name,
+    inputs: view.workflow.inputs,
+    steps: view.workflow.steps.map((step) => step.id),
+  } : null,
+  run: view.run ? {
+    id: view.run.id,
+    status: view.run.status,
+    steps: view.run.steps.map((step) => ({ id: step.id, status: step.status, error: step.error ?? null })),
+  } : null,
+  workflowError: view.error ?? null,
+  bridgeState: view.bridgeState ?? 'disabled',
+  locale: view.locale ?? 'en',
+  localePreference: view.localePreference ?? 'auto',
+  guideIndex,
+  context: view.context ? {
+    pressure: view.context.pressure
+      ? {
+          level: view.context.pressure.level,
+          percent: Math.round(view.context.pressure.ratio * 100),
+          estimatedTokens: view.context.pressure.estimatedTokens,
+          capacityTokens: view.context.pressure.capacity.usableTokens,
+        }
+      : null,
+    capacityOverride: view.context.capacityOverride ?? null,
+    handoffStatus: view.context.handoff?.status ?? 'none',
+    carriedItems: view.context.handoff?.carriedItems ?? 0,
+    adapter: view.context.adapter
+      ? {
+          health: view.context.adapter.report.health,
+          recognized: view.context.adapter.report.recognized,
+          isGenerating: view.context.adapter.report.isGenerating,
+          composerReady: view.context.adapter.report.composerReady,
+          blockingReason: view.context.adapter.report.blockingReason,
+          confirmationVisible: view.context.adapter.report.confirmationVisible,
+          sendControl: view.context.adapter.report.sendControl.status,
+          stopControl: view.context.adapter.report.stopControl.status,
+          transcript: view.context.adapter.report.transcript.status,
+          assistantTurn: view.context.adapter.report.assistantTurn.status,
+        }
+      : null,
+  } : null,
+});
