@@ -59,6 +59,7 @@ let recoveringTransientBlock = false;
 let contextCapacityOverride: number | undefined;
 let handoffRecord: HandoffRecord | undefined;
 let handoffCaptureInFlight = false;
+let handoffPauseRequested = false;
 let pressureCache: ContextPressure | undefined;
 let pressureCacheAt = 0;
 let lastPassiveRenderAt = 0;
@@ -102,6 +103,7 @@ let panel: QueuePanel;
 const render = async (): Promise<ConversationQueue | undefined> => {
   const queue = await client.get(currentKey);
   if (queue) {
+    await pauseForHandoffOnceDispatched(queue);
     await maybeCaptureHandoff(queue);
     const notice = queue.blockedReason === 'dom-unrecognized'
       ? `DOM diagnostics: ${adapter.getDiagnosticSummary()}`
@@ -147,6 +149,24 @@ const buildContextView = (queue: ConversationQueue): QueuePanelContextView => {
 };
 
 /**
+ * Stops the source queue from dispatching anything after the handoff prompt.
+ *
+ * This has to happen while the prompt is still generating, not once its reply has been captured:
+ * the runner keeps observing a paused queue's active item, so pausing here lets the brief finish
+ * and guarantees the next queued follow-up is never sent, while pausing later leaves a window in
+ * which it can already have been dispatched.
+ */
+const pauseForHandoffOnceDispatched = async (queue: ConversationQueue): Promise<void> => {
+  if (handoffPauseRequested || !ownsCurrent) return;
+  const dispatched = queue.items.some(
+    (item) => item.content === HANDOFF_PROMPT && (item.state === 'sending' || item.state === 'running'),
+  );
+  if (!dispatched) return;
+  handoffPauseRequested = true;
+  await client.request({ type: 'pause', key: currentKey }).catch(() => undefined);
+};
+
+/**
  * Turns a completed handoff prompt into a durable brief.
  *
  * Fail-closed: an unrecognized or incomplete brief never becomes a handoff, and the source queue is
@@ -183,8 +203,8 @@ const maybeCaptureHandoff = async (queue: ConversationQueue): Promise<void> => {
     });
     if (!result.ok) return;
     handoffRecord = result.record;
-    // Keep the remaining follow-ups queued for the fresh conversation rather than spending them on
-    // a conversation that has run out of headroom.
+    // Backstop for the earlier pause: the remaining follow-ups stay queued for the fresh
+    // conversation rather than being spent on a conversation that has run out of headroom.
     if (ownsCurrent) await client.request({ type: 'pause', key: currentKey }).catch(() => undefined);
   } finally {
     handoffCaptureInFlight = false;
@@ -211,6 +231,7 @@ const prepareHandoff = async (): Promise<void> => {
   }
 
   localNotice = undefined;
+  handoffPauseRequested = false;
   try {
     const added = await client.request<ConversationQueue>({ type: 'add', key: currentKey, messages: [HANDOFF_PROMPT] });
     const handoffItem = [...added.items].reverse().find((item) => item.content === HANDOFF_PROMPT);
