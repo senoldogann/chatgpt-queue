@@ -3,6 +3,7 @@ dist/
 dist-e2e/
 dist-cli/
 dist-native/
+release/
 test-results/
 playwright-report/
 .DS_Store

@@ -46,9 +46,9 @@ npm run build
 
 The production extension is written to `dist/`.
 
-## FlowRun v0.3 unattended CLI bridge
+## FlowRun unattended CLI bridge (FlowRun schema v0.3)
 
-FlowRun is a local-first deterministic workflow runtime built on top of the same fail-closed ChatGPT Queue engine. v0.3 adds **durable CLI submission**: after the extension accepts a job, the CLI is no longer the workflow controller. You can close the terminal or use `--detach`; the extension continues the workflow locally as long as **Chrome remains open, the target ChatGPT tab remains available, and the computer stays awake**.
+FlowRun is a local-first deterministic workflow runtime built on top of the same fail-closed ChatGPT Queue engine. FlowRun schema v0.3 adds **durable CLI submission**: after the extension accepts a job, the CLI is no longer the workflow controller. You can close the terminal or use `--detach`; the extension continues the workflow locally as long as **Chrome remains open, the target ChatGPT tab remains available, and the computer stays awake**.
 
 The runtime also supports direct extension execution from the **Workflow** section. You can choose one of the built-in professional workflows or load your own `.flowrun.json` file. Built-in workflows use the same versioned FlowRun schema, local execution path, assertions, and fail-closed behavior as custom workflows; selecting one does not add network access or call an API.
 
@@ -256,6 +256,9 @@ The project does not read browser cookies or credentials, call the OpenAI API, s
 - `scripts/build-cli.mjs` — Node CLI build.
 - `scripts/build-native-host.mjs` — local Native Messaging host build.
 - `scripts/build-e2e.mjs` — test-only extension build.
+- `scripts/check-version.mjs` — release version contract check.
+- `scripts/package-release.mjs` — release asset packaging (zip plus checksum).
+- `release-notes/` — reviewed release notes, one file per release tag.
 
 ## Verification
 
@@ -264,8 +267,40 @@ The main local verification sequence is:
 ```bash
 npm test
 npm run typecheck
+npm run check:version
 npm run build
 npm run build:cli
 npm run build:native-host
 npm run test:e2e
 ```
+
+`npm run verify` runs the typecheck, version check, unit/integration tests, and the three builds. The browser E2E suite is separate because it needs Playwright's Chromium.
+
+## Versioning and releases
+
+`package.json` and `manifest.json` always carry the same extension version, and that contract is enforced rather than assumed: `npm run check:version` fails when the two disagree, when a version is not a valid Chrome extension version, or when a release tag targets a different version. It runs on every CI build and again against the tag before anything is packaged.
+
+A Chrome Manifest V3 version can only contain 1–4 dot-separated integers, so a release candidate keeps the base extension version and the candidate number lives only in the tag:
+
+| release tag | packaged extension version |
+| --- | --- |
+| `v0.1.0` | `0.1.0` |
+| `v0.1.0-rc.3` | `0.1.0` |
+
+`FlowRun v0.1`–`v0.3` labels used in this README and in `docs/superpowers/` describe FlowRun workflow-runtime generations, not the extension release version.
+
+Cut a release:
+
+1. Bump `version` in `package.json` and `manifest.json` together when the base version changes.
+2. Copy `release-notes/TEMPLATE.md` to `release-notes/<tag>.md` and fill in every section.
+3. Merge that change to `main`, then push the tag: `git tag v0.1.0-rc.4 && git push origin v0.1.0-rc.4`.
+4. The Release workflow verifies the tagged commit (unit/integration tests, typecheck, production/CLI/native-host builds, browser E2E), confirms the tag is an ancestor of `main`, requires the release notes file, packages the extension from that same verified build, and publishes the GitHub Release with `chatgpt-queue-<tag>.zip` and `chatgpt-queue-<tag>.zip.sha256`. Tags containing a suffix such as `-rc.4` are published as pre-releases.
+
+To rehearse without publishing, run the **Release** workflow from the Actions tab with `dry_run` left enabled; the packaged assets then stay workflow artifacts. The same packaging step is available locally:
+
+```bash
+npm run build
+npm run package:release -- --tag v0.1.0-rc.4
+```
+
+The packaging script is deterministic: it stages the built `dist/` files with a fixed timestamp, refuses to package a build whose manifest references a file that is not present, and writes the archive plus `<archive>.sha256` into the git-ignored `release/` directory.

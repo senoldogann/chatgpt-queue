@@ -10,10 +10,12 @@
     "build": "node scripts/build.mjs",
     "build:cli": "node scripts/build-cli.mjs",
     "typecheck": "tsc --noEmit",
+    "check:version": "node scripts/check-version.mjs",
+    "package:release": "node scripts/package-release.mjs",
     "test": "vitest run",
     "test:unit": "vitest run tests",
     "test:e2e": "node scripts/build-e2e.mjs && playwright test",
-    "verify": "npm run typecheck && npm test && npm run build && npm run build:cli && npm run build:native-host",
+    "verify": "npm run typecheck && npm run check:version && npm test && npm run build && npm run build:cli && npm run build:native-host",
     "build:native-host": "node scripts/build-native-host.mjs"
   },
   "devDependencies": {

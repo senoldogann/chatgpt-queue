@@ -1,0 +1,142 @@
+name: Release
+
+# Tag-driven release. The published assets are the ones the verify job built,
+# so a release can no longer be assembled by hand or drift from what was tested.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to use, for example v0.1.0-rc.4
+        required: true
+        type: string
+      ref:
+        description: Commit, branch, or tag to build. Defaults to the release tag, so set this (for example to a branch) when rehearsing a tag that does not exist yet.
+        required: false
+        type: string
+        default: ''
+      dry_run:
+        description: Build and package only; do not create or update the GitHub Release
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    uses: ./.github/workflows/verify.yml
+    with:
+      ref: ${{ inputs.ref || inputs.tag || github.ref }}
+
+  release:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      actions: read
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+      REF: ${{ inputs.ref || inputs.tag || github.ref }}
+      PUBLISH: ${{ github.event_name == 'push' || inputs.dry_run == false }}
+    steps:
+      - name: Checkout the released commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.REF }}
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22.22.2
+
+      - name: Require the release commit to be on main
+        run: |
+          git fetch --force --no-tags origin refs/heads/main:refs/remotes/origin/main
+          if git merge-base --is-ancestor HEAD refs/remotes/origin/main; then
+            echo "release commit $(git rev-parse --short HEAD) is on main" >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$PUBLISH" = "true" ]; then
+            echo "::error::${TAG} points at $(git rev-parse --short HEAD), which is not an ancestor of origin/main. Release only merged commits."
+            exit 1
+          else
+            echo "::warning::$(git rev-parse --short HEAD) is not an ancestor of origin/main; allowed because this is a rehearsal."
+          fi
+
+      - name: Version consistency with the release tag
+        run: node scripts/check-version.mjs --tag "$TAG"
+
+      - name: Check release notes
+        run: |
+          if [ -f "release-notes/$TAG.md" ]; then
+            echo "release notes: release-notes/$TAG.md" >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$PUBLISH" = "true" ]; then
+            echo "::error::release-notes/$TAG.md is missing. Copy release-notes/TEMPLATE.md, fill it in, and commit it to main before tagging."
+            exit 1
+          else
+            echo "::warning::release-notes/$TAG.md does not exist yet; publishing $TAG would fail until it is committed."
+          fi
+
+      - name: Download the verified production extension
+        uses: actions/download-artifact@v7
+        with:
+          name: chatgpt-queue-dist
+          path: dist
+
+      - name: Package release assets
+        run: node scripts/package-release.mjs --tag "$TAG" --dist dist --out release
+
+      - name: Upload release assets as workflow artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: chatgpt-queue-release-${{ inputs.tag || github.ref_name }}
+          path: release/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish GitHub Release
+        if: ${{ env.PUBLISH == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          {
+            cat "release-notes/$TAG.md"
+            printf '\n## Build provenance\n\n'
+            printf -- '- Commit: `%s`\n' "$(git rev-parse HEAD)"
+            printf -- '- Verified by: %s/%s/actions/runs/%s\n' "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID"
+            printf -- '- Assets: `chatgpt-queue-%s.zip` and `chatgpt-queue-%s.zip.sha256`\n' "$TAG" "$TAG"
+          } > release-body.md
+
+          PRERELEASE_FLAG=""
+          case "$TAG" in
+            *-*) PRERELEASE_FLAG="--prerelease" ;;
+          esac
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" release/*.zip release/*.zip.sha256 --clobber
+            gh release edit "$TAG" --title "ChatGPT Queue $TAG" --notes-file release-body.md $PRERELEASE_FLAG
+          else
+            gh release create "$TAG" release/*.zip release/*.zip.sha256 --title "ChatGPT Queue $TAG" --notes-file release-body.md $PRERELEASE_FLAG
+          fi
+
+          {
+            echo
+            echo "Published: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Record the dry run
+        if: ${{ env.PUBLISH != 'true' }}
+        run: |
+          {
+            echo
+            echo "Dry run: nothing was published. Re-run this workflow for the tag \`$TAG\` with **dry_run** disabled, or push the tag, to publish the release."
+          } >> "$GITHUB_STEP_SUMMARY"
