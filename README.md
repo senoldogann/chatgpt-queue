@@ -50,7 +50,19 @@ The production extension is written to `dist/`.
 
 FlowRun is a local-first deterministic workflow runtime built on top of the same fail-closed ChatGPT Queue engine. v0.3 adds **durable CLI submission**: after the extension accepts a job, the CLI is no longer the workflow controller. You can close the terminal or use `--detach`; the extension continues the workflow locally as long as **Chrome remains open, the target ChatGPT tab remains available, and the computer stays awake**.
 
-The runtime still supports direct extension execution through **Workflow → Load workflow**. A workflow can chain completed assistant output into later prompts:
+The runtime also supports direct extension execution from the **Workflow** section. You can choose one of the built-in professional workflows or load your own `.flowrun.json` file. Built-in workflows use the same versioned FlowRun schema, local execution path, assertions, and fail-closed behavior as custom workflows; selecting one does not add network access or call an API.
+
+Built-in workflows:
+
+- **Production Readiness** — architecture, correctness, verification evidence, and release-decision review.
+- **Code Review** — reconstructs intent, identifies concrete defects, designs regression coverage, and produces a severity-ordered review.
+- **Root Cause Debugging** — separates facts from assumptions, ranks hypotheses, traces the causal chain, and proposes the smallest regression-tested fix.
+- **Release Gate** — defines the release contract, ranks credible risk, audits evidence, and returns `GO`, `GO WITH CONDITIONS`, or `NO-GO`.
+- **Implementation Plan** — converts requirements into a bounded contract, minimal architecture, incremental tasks, and explicit completion gates.
+
+Each preset contains chained ChatGPT steps and requires non-empty output at every stage. Presets are copied before use, so a selected workflow cannot mutate the built-in catalog. **Load custom workflow** remains available for developer-authored files.
+
+A workflow can chain completed assistant output into later prompts:
 
 ```json
 {

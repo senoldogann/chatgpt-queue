@@ -223,6 +223,75 @@ describe('QueuePanel', () => {
     expect(clearWorkflow).toHaveBeenCalledTimes(1);
   });
 
+  it('renders professional workflow presets, previews the selection, and loads one only from an explicit action', async () => {
+    const loadWorkflowPreset = vi.fn();
+    const host = document.createElement('div');
+    document.body.append(host);
+    const panel = new QueuePanel(host, { loadWorkflowPreset });
+    const idle: ConversationQueue = {
+      ...sampleQueue(),
+      status: 'completed',
+      items: [],
+      runtime: { phase: 'idle' },
+    };
+
+    panel.render(idle, undefined, {});
+    const root = host.shadowRoot!;
+    const select = root.querySelector<HTMLSelectElement>('[data-role="workflow-preset"]')!;
+    expect(select).not.toBeNull();
+    expect(Array.from(select.options).map((option) => option.textContent)).toEqual([
+      'Choose a built-in workflow',
+      'Production Readiness',
+      'Code Review',
+      'Root Cause Debugging',
+      'Release Gate',
+      'Implementation Plan',
+    ]);
+    expect(root.querySelector('[data-role="workflow-preset-description"]')?.textContent).toContain('Choose a proven local workflow');
+    expect(root.querySelector('[data-role="workflow-file"]')).not.toBeNull();
+
+    select.value = 'root-cause-debugging';
+    select.dispatchEvent(new Event('change'));
+    expect(root.querySelector('[data-role="workflow-preset-description"]')?.textContent).toContain('Evidence-first diagnosis');
+    expect(loadWorkflowPreset).not.toHaveBeenCalled();
+
+    root.querySelector<HTMLButtonElement>('[data-action="load-workflow-preset"]')!.click();
+    await Promise.resolve();
+    expect(loadWorkflowPreset).toHaveBeenCalledWith('root-cause-debugging');
+  });
+
+  it('keeps a staged preset selection across panel re-renders so Use preset stays actionable', async () => {
+    const loadWorkflowPreset = vi.fn();
+    const host = document.createElement('div');
+    document.body.append(host);
+    const panel = new QueuePanel(host, { loadWorkflowPreset });
+    const idle: ConversationQueue = {
+      ...sampleQueue(),
+      status: 'completed',
+      items: [],
+      runtime: { phase: 'idle' },
+    };
+
+    panel.render(idle, undefined, {});
+    const root = host.shadowRoot!;
+    const select = root.querySelector<HTMLSelectElement>('[data-role="workflow-preset"]')!;
+    select.value = 'release-gate';
+    select.dispatchEvent(new Event('change'));
+
+    // Background queue/bridge updates re-render the panel and previously dropped the staged choice.
+    panel.render({ ...idle, status: 'running', runtime: { phase: 'generating' } }, 'bridge-reconnected', {});
+
+    const rerenderedSelect = root.querySelector<HTMLSelectElement>('[data-role="workflow-preset"]')!;
+    expect(rerenderedSelect.value).toBe('release-gate');
+    expect(root.querySelector('[data-role="workflow-preset-description"]')?.textContent).toContain('Evidence-based go/no-go');
+    const button = root.querySelector<HTMLButtonElement>('[data-action="load-workflow-preset"]')!;
+    expect(button.disabled).toBe(false);
+
+    button.click();
+    await Promise.resolve();
+    expect(loadWorkflowPreset).toHaveBeenCalledWith('release-gate');
+  });
+
   it('loads workflow text from a selected file and renders live run progress and block reason', async () => {
     const loadWorkflow = vi.fn();
     const host = document.createElement('div');

@@ -7,6 +7,7 @@ import type { ConversationQueue } from './domain/types';
 import { FlowRunBrowserController } from './flowrun/browser-controller';
 import { QueueBackedFlowRunHost } from './flowrun/content-host';
 import type { WorkflowRun } from './flowrun/events';
+import { getWorkflowPreset } from './flowrun/presets';
 import { chromeFlowRunStorageArea, FlowRunRunRepository } from './flowrun/run-repository';
 import { validateWorkflowDocument, type WorkflowDefinition } from './flowrun/schema';
 import { ChromeClient } from './runtime/chrome-client';
@@ -303,6 +304,20 @@ const loadWorkflowText = async (text: string): Promise<void> => {
   await render();
 };
 
+const loadWorkflowPreset = async (presetId: string): Promise<void> => {
+  const preset = getWorkflowPreset(presetId);
+  if (!preset) {
+    workflowError = `Unknown workflow preset: ${presetId}`;
+    await render();
+    return;
+  }
+
+  selectedWorkflow = preset.workflow;
+  workflowRun = undefined;
+  workflowError = undefined;
+  await render();
+};
+
 const runSelectedWorkflow = async (inputs: Record<string, string>): Promise<void> => {
   if (!selectedWorkflow) {
     workflowError = 'No workflow loaded.';
@@ -347,6 +362,7 @@ panel = new QueuePanel(host, {
     await mutateAndRender({ type: 'reorder', key: currentKey, itemId, queuedIndex: target });
   },
   loadWorkflow: loadWorkflowText,
+  loadWorkflowPreset,
   runWorkflow: runSelectedWorkflow,
   clearWorkflow: clearSelectedWorkflow,
   enableBridge: async () => {
