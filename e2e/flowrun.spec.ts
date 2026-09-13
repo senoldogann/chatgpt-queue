@@ -90,6 +90,19 @@ const chainedWorkflow = {
   ],
 };
 
+test('loads a built-in professional workflow preset without requiring a file', async ({ extensionContext }) => {
+  const page = await openFixture(extensionContext, '/c/preset-load');
+  const root = queueRoot(page);
+
+  await root.locator('[data-role="workflow-preset"]').selectOption('implementation-plan');
+  await root.locator('[data-action="load-workflow-preset"]').click();
+
+  await expect(root).toContainText('implementation-plan');
+  await expect(root).toContainText('4 steps');
+  await expect(root.locator('[data-workflow-input="requirements"]')).toBeAttached();
+  await expect(root.locator('[data-workflow-input="context"]')).toBeAttached();
+});
+
 test('runs a live two-step workflow and chains the captured assistant output', async ({ extensionContext, extensionWorker }) => {
   const page = await openFixture(extensionContext, '/c/flowrun-chain?response=architecture%20result&response=tests%20done');
   await loadWorkflow(page, chainedWorkflow);

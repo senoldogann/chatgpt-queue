@@ -1,5 +1,6 @@
 import type { ConversationQueue, QueueItem } from '../domain/types';
 import type { WorkflowRun } from '../flowrun/events';
+import { WORKFLOW_PRESETS } from '../flowrun/presets';
 import type { WorkflowDefinition } from '../flowrun/schema';
 
 type MaybePromise = void | Promise<void>;
@@ -13,6 +14,7 @@ export interface QueuePanelActions {
   remove?: (itemId: string) => MaybePromise;
   reorder?: (itemId: string, delta: number) => MaybePromise;
   loadWorkflow?: (text: string) => MaybePromise;
+  loadWorkflowPreset?: (presetId: string) => MaybePromise;
   runWorkflow?: (inputs: Record<string, string>) => MaybePromise;
   clearWorkflow?: () => MaybePromise;
   enableBridge?: () => MaybePromise;
@@ -82,6 +84,7 @@ export class QueuePanel {
   private readonly root: ShadowRoot;
   private lastConversationKey?: string;
   private lastVisualSignature?: string;
+  private selectedPresetId = '';
   private collapsed = readCollapsedPreference();
 
   constructor(private readonly host: HTMLElement, private readonly actions: QueuePanelActions) {
@@ -107,6 +110,9 @@ export class QueuePanel {
         if (input.dataset.workflowInput) workflowDrafts.set(input.dataset.workflowInput, input.value);
       }
     }
+
+    const livePreset = this.root.querySelector<HTMLSelectElement>('[data-role="workflow-preset"]');
+    if (livePreset) this.selectedPresetId = livePreset.value;
 
     const active = sameConversation ? this.root.activeElement : null;
     const focusedNewMessage = active instanceof HTMLTextAreaElement && active.dataset.role === 'new-message';
@@ -183,6 +189,12 @@ export class QueuePanel {
     const workflowError = workflowView.error
       ? `<div class="notice danger-notice"><strong>Workflow:</strong> ${escapeHtml(workflowView.error)}</div>`
       : '';
+    const selectedPreset = WORKFLOW_PRESETS.find((preset) => preset.id === this.selectedPresetId);
+    const workflowPresetOptions = WORKFLOW_PRESETS.map((preset) =>
+      `<option value="${escapeHtml(preset.id)}" data-description="${escapeHtml(preset.description)}"${preset.id === selectedPreset?.id ? ' selected' : ''}>${escapeHtml(preset.label)}</option>`
+    ).join('');
+    const workflowPresetDescription = selectedPreset?.description
+      ?? 'Choose a proven local workflow and review its inputs before running.';
     const workflowSection = workflow
       ? `<section class="workflow-section">
           <div class="workflow-heading">
@@ -200,7 +212,19 @@ export class QueuePanel {
           <div class="workflow-heading"><div><strong>Workflow</strong><span class="workflow-subtitle">FlowRun</span></div></div>
           ${workflowRunSummary}
           ${workflowError}
-          <label class="workflow-file-button">Load workflow<input data-role="workflow-file" type="file" accept=".json,.flowrun.json,application/json" /></label>
+          <div class="workflow-preset-picker">
+            <span class="workflow-preset-label">Built-in workflows</span>
+            <div class="workflow-preset-row">
+              <select data-role="workflow-preset" aria-label="Workflow preset">
+                <option value="">Choose a built-in workflow</option>
+                ${workflowPresetOptions}
+              </select>
+              <button class="ghost" data-action="load-workflow-preset"${selectedPreset ? '' : ' disabled'}>Use preset</button>
+            </div>
+            <div class="workflow-preset-description" data-role="workflow-preset-description">${escapeHtml(workflowPresetDescription)}</div>
+          </div>
+          <div class="workflow-divider"><span>or</span></div>
+          <label class="workflow-file-button">Load custom workflow<input data-role="workflow-file" type="file" accept=".json,.flowrun.json,application/json" /></label>
         </section>`;
     const bridgeControl = bridgeState === 'connected'
       ? '<div class="bridge-row"><span>CLI bridge</span><span class="bridge-state connected">Connected</span></div>'
@@ -423,6 +447,27 @@ export class QueuePanel {
         .workflow-inputs { display: grid; gap: 8px; }
         .workflow-input-label { display: grid; gap: 5px; color: #aaa; font-size: 11px; }
         .workflow-input-label input { min-height: 38px; }
+        .workflow-preset-picker { display: grid; gap: 7px; }
+        .workflow-preset-label { color: #aaa; font-size: 11px; }
+        .workflow-preset-row { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 8px; align-items: stretch; }
+        .workflow-preset-row select {
+          min-width: 0;
+          min-height: 38px;
+          border: 1px solid rgba(255,255,255,.14);
+          border-radius: 10px;
+          outline: none;
+          background: #232323;
+          color: #f5f5f5;
+          padding: 7px 9px;
+          font: inherit;
+        }
+        .workflow-preset-row select:focus {
+          border-color: rgba(255,255,255,.38);
+          box-shadow: 0 0 0 3px rgba(255,255,255,.06);
+        }
+        .workflow-preset-description { color: #aaa; font-size: 11px; line-height: 1.4; }
+        .workflow-divider { display: flex; align-items: center; gap: 8px; color: #777; font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }
+        .workflow-divider::before, .workflow-divider::after { content: ''; height: 1px; flex: 1; background: rgba(255,255,255,.08); }
         .workflow-run {
           padding: 9px 10px;
           border: 1px solid rgba(255,255,255,.08);
@@ -559,6 +604,24 @@ export class QueuePanel {
       const file = input.files?.[0];
       if (!file || !this.actions.loadWorkflow) return;
       void file.text().then((text) => this.actions.loadWorkflow!(text)).catch(() => undefined);
+    });
+
+    const workflowPreset = this.root.querySelector<HTMLSelectElement>('[data-role="workflow-preset"]');
+    const workflowPresetDescription = this.root.querySelector<HTMLElement>('[data-role="workflow-preset-description"]');
+    const workflowPresetButton = this.root.querySelector<HTMLButtonElement>('[data-action="load-workflow-preset"]');
+    workflowPreset?.addEventListener('change', () => {
+      const option = workflowPreset.selectedOptions[0];
+      this.selectedPresetId = workflowPreset.value;
+      if (workflowPresetDescription) {
+        workflowPresetDescription.textContent = option?.dataset.description
+          ?? 'Choose a proven local workflow and review its inputs before running.';
+      }
+      if (workflowPresetButton) workflowPresetButton.disabled = workflowPreset.value.length === 0;
+    });
+    workflowPresetButton?.addEventListener('click', () => {
+      const presetId = workflowPreset?.value ?? '';
+      if (!presetId || !this.actions.loadWorkflowPreset) return;
+      invoke(() => this.actions.loadWorkflowPreset!(presetId));
     });
 
     this.root.querySelector('[data-action="clear-workflow"]')?.addEventListener('click', () => invoke(this.actions.clearWorkflow));
