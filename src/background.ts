@@ -8,7 +8,8 @@ import { TargetRegistry } from './bridge/target-registry';
 import { QueueCoordinator } from './coordinator/queue-coordinator';
 import type { ConversationQueue } from './domain/types';
 import { handleBackgroundRequest } from './runtime/background-handler';
-import type { BackgroundEnvelope, BackgroundRequest, BridgeControlRequest, ExtensionRequest } from './runtime/protocol';
+import { handleHandoffRequest, type HandoffTarget } from './runtime/handoff-handler';
+import type { BackgroundEnvelope, BackgroundRequest, BridgeControlRequest, ExtensionRequest, HandoffControlRequest } from './runtime/protocol';
 import { chromeStorageArea, QueueRepository } from './storage/queue-repository';
 
 const coordinator = new QueueCoordinator(new QueueRepository(chromeStorageArea()));
@@ -48,6 +49,33 @@ const isBridgeRequest = (request: ExtensionRequest): request is BridgeControlReq
   || request.type === 'bridgeState'
   || request.type === 'bridgeEnable'
   || request.type === 'bridgeJobUpdate';
+
+const HANDOFF_TARGET_KEY = 'chatgptQueueHandoffTarget';
+
+const isHandoffRequest = (request: ExtensionRequest): request is HandoffControlRequest =>
+  request.type === 'handoffOpen' || request.type === 'handoffClaim';
+
+const handoffTargets = {
+  get: async (): Promise<HandoffTarget | undefined> => {
+    const stored = await chrome.storage.session.get(HANDOFF_TARGET_KEY);
+    const target = stored[HANDOFF_TARGET_KEY] as HandoffTarget | undefined;
+    if (!target || typeof target.tabId !== 'number' || typeof target.createdAt !== 'number') return undefined;
+    return target;
+  },
+  set: async (target: HandoffTarget): Promise<void> => {
+    await chrome.storage.session.set({ [HANDOFF_TARGET_KEY]: target });
+  },
+  clear: async (): Promise<void> => {
+    await chrome.storage.session.remove(HANDOFF_TARGET_KEY);
+  },
+};
+
+const runHandoffRequest = (request: HandoffControlRequest, tabId: number, senderUrl: string | undefined): Promise<unknown> =>
+  handleHandoffRequest(request, tabId, senderUrl, {
+    now: () => Date.now(),
+    createTab: (url) => chrome.tabs.create({ url }),
+    targets: handoffTargets,
+  });
 
 const handleBridgeRequest = async (request: BridgeControlRequest, tabId: number): Promise<unknown> => {
   switch (request.type) {
@@ -108,6 +136,13 @@ chrome.runtime.onMessage.addListener((rawRequest: ExtensionRequest, sender, send
 
   if (isBridgeRequest(rawRequest)) {
     void handleBridgeRequest(rawRequest, tabId)
+      .then((data) => sendResponse({ ok: true, data }))
+      .catch((error: unknown) => sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) }));
+    return true;
+  }
+
+  if (isHandoffRequest(rawRequest)) {
+    void runHandoffRequest(rawRequest, tabId, sender.tab?.url)
       .then((data) => sendResponse({ ok: true, data }))
       .catch((error: unknown) => sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) }));
     return true;

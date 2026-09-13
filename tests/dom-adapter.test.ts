@@ -329,6 +329,95 @@ describe('DOMChatGPTAdapter', () => {
     expect(diagnostics).not.toContain('private draft text');
     expect(diagnostics).not.toContain('ignored label text');
   });
+  it('reports an ok interface while the composer and a send control are both recognized', () => {
+    const adapter = render(`
+      <main>
+        <div id="prompt-textarea" contenteditable="true"></div>
+        <button data-testid="send-button">Send</button>
+      </main>`);
+
+    const report = adapter.inspectInterface();
+
+    expect(report.health).toBe('ok');
+    expect(report.recognized).toBe(true);
+    expect(report.composer).toEqual({ status: 'ok', matchedSelector: '#prompt-textarea' });
+    expect(report.sendControl).toEqual({ status: 'ok', matchedSelector: 'button[data-testid="send-button"]' });
+    expect(report.stopControl).toEqual({ status: 'missing', matchedSelector: null });
+    expect(report.transcript.status).toBe('ok');
+    expect(report.sendControlPresent).toBe(true);
+    expect(report.isGenerating).toBe(false);
+  });
+
+  it('stays ok while generating, when the send control is legitimately replaced by stop', () => {
+    const adapter = render(`
+      <main>
+        <div id="prompt-textarea" contenteditable="true"></div>
+        <button aria-label="Stop generating">Stop</button>
+      </main>`);
+
+    const report = adapter.inspectInterface();
+
+    expect(report.health).toBe('ok');
+    expect(report.isGenerating).toBe(true);
+    expect(report.sendControlPresent).toBe(false);
+    expect(report.stopControl.matchedSelector).toBe('button[aria-label="Stop generating"]');
+  });
+
+  it('treats an idle empty composer as healthy, matching how ChatGPT renders', () => {
+    const report = render(`
+      <main>
+        <div id="prompt-textarea" contenteditable="true"></div>
+        <button aria-label="Start dictation"></button>
+      </main>`).inspectInterface();
+
+    expect(report.health).toBe('ok');
+    expect(report.recognized).toBe(true);
+    expect(report.sendControl.status).toBe('missing');
+  });
+
+  it('distinguishes a degraded interface from an unrecognized one', () => {
+    const degraded = render(`
+      <main>
+        <div id="prompt-textarea" contenteditable="true">unsendable draft</div>
+        <button aria-label="New chat">New chat</button>
+      </main>`).inspectInterface();
+    expect(degraded.health).toBe('degraded');
+    expect(degraded.recognized).toBe(true);
+    expect(degraded.sendControl.status).toBe('missing');
+
+    const unrecognized = render('<main><p>Some unrelated page.</p></main>').inspectInterface();
+    expect(unrecognized.health).toBe('unrecognized');
+    expect(unrecognized.recognized).toBe(false);
+    expect(unrecognized.composer.status).toBe('missing');
+  });
+
+  it('samples visible conversation turns in order without reading the composer draft', () => {
+    const adapter = render(`
+      <main>
+        <div id="prompt-textarea" contenteditable="true">draft that must not be counted</div>
+        <article data-message-author-role="user">first question</article>
+        <article data-testid="conversation-turn-2" data-turn="assistant" data-turn-id="turn-2">
+          <div data-message-author-role="assistant">first answer<button data-testid="copy-turn-action-button">Copy</button></div>
+        </article>
+        <article data-message-author-role="user">second question</article>
+        <article data-testid="conversation-turn-4" data-turn="assistant" data-turn-id="turn-4">
+          <div data-message-author-role="assistant">second answer</div>
+        </article>
+      </main>`);
+
+    expect(adapter.getConversationTurns()).toEqual([
+      { role: 'user', text: 'first question' },
+      { role: 'assistant', text: 'first answer' },
+      { role: 'user', text: 'second question' },
+      { role: 'assistant', text: 'second answer' },
+    ]);
+    expect(adapter.getConversationTurns(2)).toEqual([
+      { role: 'user', text: 'second question' },
+      { role: 'assistant', text: 'second answer' },
+    ]);
+    expect(adapter.getConversationTurns(0)).toEqual([]);
+  });
+
   it('changes fallback assistant turn identity when virtualization replaces a turn without changing count', () => {
     const adapter = render(`
       <main>

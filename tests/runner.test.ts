@@ -37,6 +37,24 @@ class FakeAdapter implements ChatGPTAdapter {
   constructor(public snapshot: PageSnapshot, private result: SendResult = { attempted: true }) {}
   getState(domStable: boolean) { return { ...this.snapshot, domStable }; }
   getLatestCompletedAssistantArtifact() { return null; }
+  inspectInterface() {
+    return {
+      health: 'ok' as const,
+      recognized: true,
+      composer: { status: 'ok' as const, matchedSelector: '#prompt-textarea' },
+      sendControl: { status: 'ok' as const, matchedSelector: 'button[data-testid="send-button"]' },
+      stopControl: { status: 'missing' as const, matchedSelector: null },
+      transcript: { status: 'ok' as const, matchedSelector: 'main' },
+      assistantTurn: { status: 'missing' as const, matchedSelector: null },
+      isGenerating: false,
+      composerReady: true,
+      sendControlPresent: true,
+      blockingReason: null,
+      confirmationVisible: false,
+    };
+  }
+  getConversationTurns() { return []; }
+  getDiagnosticSummary() { return 'composer=ok'; }
   async sendMessage(content: string) { this.sent.push(content); return this.result; }
 }
 

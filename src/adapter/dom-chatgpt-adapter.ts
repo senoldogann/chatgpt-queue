@@ -1,4 +1,11 @@
-import type { AssistantArtifact, ChatGPTAdapter, SendResult } from './chatgpt-adapter';
+import type {
+  AdapterInterfaceReport,
+  AdapterSelectorProbe,
+  AssistantArtifact,
+  ChatGPTAdapter,
+  ConversationTurnSample,
+  SendResult,
+} from './chatgpt-adapter';
 import type { PageSnapshot } from '../domain/types';
 
 const SEND_SELECTORS = [
@@ -22,6 +29,18 @@ const COMPOSER_SELECTORS = [
   '[data-testid="prompt-textarea"]',
 ];
 
+const TRANSCRIPT_SELECTORS = [
+  'main',
+  '[role="main"]',
+  '#thread',
+];
+
+const USER_ROLE_SELECTORS = [
+  '[data-message-author-role="user"]',
+  '[data-role="user"]',
+  '[data-message-author="user"]',
+];
+
 const ASSISTANT_ROLE_SELECTORS = [
   '[data-message-author-role="assistant"]',
   '[data-role="assistant"]',
@@ -39,6 +58,10 @@ const ASSISTANT_COMPLETION_SELECTORS = [
   'button[aria-label*="Yaniti kopyala" i]',
 ];
 
+const USER_ROLE_SELECTOR = USER_ROLE_SELECTORS.join(', ');
+const CONVERSATION_MESSAGE_SELECTOR = [...USER_ROLE_SELECTORS, ...ASSISTANT_CANDIDATE_SELECTOR.split(', ')].join(', ');
+const DEFAULT_CONVERSATION_TURN_LIMIT = 40;
+
 const SEND_CONTROL_WAIT_MS = 1_500;
 
 const first = <T extends Element>(document: Document, selectors: string[]): T | null => {
@@ -48,6 +71,24 @@ const first = <T extends Element>(document: Document, selectors: string[]): T | 
   }
   return null;
 };
+
+interface SelectorMatch {
+  element: Element | null;
+  selector: string | null;
+}
+
+const probe = (document: Document, selectors: string[]): SelectorMatch => {
+  for (const selector of selectors) {
+    const element = document.querySelector(selector);
+    if (element) return { element, selector };
+  }
+  return { element: null, selector: null };
+};
+
+const selectorProbe = (match: SelectorMatch): AdapterSelectorProbe => ({
+  status: match.element ? 'ok' : 'missing',
+  matchedSelector: match.selector,
+});
 
 const firstWithin = <T extends Element>(root: Element, selectors: string[]): T | null => {
   for (const selector of selectors) {
@@ -66,6 +107,12 @@ const composerReady = (element: Element | null): boolean => {
   if (!element || isDisabled(element)) return false;
   if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) return !element.disabled;
   return element.getAttribute('contenteditable') !== 'false';
+};
+
+const composerHasText = (element: Element | null): boolean => {
+  if (!element) return false;
+  if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) return element.value.trim().length > 0;
+  return (element.textContent ?? '').trim().length > 0;
 };
 
 const waitForEnabledSend = (document: Document): Promise<HTMLButtonElement | null> => {
@@ -200,11 +247,13 @@ const assistantTurnKey = (turn: HTMLElement, message: HTMLElement, index: number
 const assistantObservationKey = (turn: HTMLElement, message: HTMLElement, index: number): string =>
   assistantStableTurnKey(turn, message) ?? `assistant:${index}:${assistantTextFingerprint(message)}`;
 
-const assistantText = (message: HTMLElement): string => {
-  const clone = message.cloneNode(true) as HTMLElement;
-  clone.querySelectorAll('button, script, style, [aria-hidden="true"], [data-testid*="copy" i]').forEach((element) => element.remove());
+const cleanText = (element: HTMLElement): string => {
+  const clone = element.cloneNode(true) as HTMLElement;
+  clone.querySelectorAll('button, script, style, [aria-hidden="true"], [data-testid*="copy" i]').forEach((node) => node.remove());
   return (clone.textContent ?? '').replace(/\s+/g, ' ').trim();
 };
+
+const assistantText = (message: HTMLElement): string => cleanText(message);
 
 const assistantTextFingerprint = (message: HTMLElement): string => {
   const text = assistantText(message);
@@ -252,6 +301,63 @@ export class DOMChatGPTAdapter implements ChatGPTAdapter {
       turnKey: assistantTurnKey(latest.turn, latest.message, entries.length),
       text,
     };
+  }
+
+  inspectInterface(): AdapterInterfaceReport {
+    const composer = probe(this.document, COMPOSER_SELECTORS);
+    const send = probe(this.document, SEND_SELECTORS);
+    const stop = probe(this.document, STOP_SELECTORS);
+    const transcript = probe(this.document, TRANSCRIPT_SELECTORS);
+    const assistantTurn = probe(this.document, ASSISTANT_ROLE_SELECTORS);
+    const isGeneratingControl = Boolean(stop.element && !isDisabled(stop.element));
+    const recognized = Boolean(composer.element || stop.element);
+
+    // Send controls are legitimately absent in two normal states: while ChatGPT is generating (the
+    // composer swaps send for stop) and while the composer is empty (real ChatGPT only renders the
+    // send control once there is something to send). So `degraded` means the page shows a composer
+    // holding text with no way to send it and no generation running — the shape this build was
+    // written against is gone, without the composer having vanished entirely.
+    const health = !recognized
+      ? 'unrecognized'
+      : composer.element && (send.element || stop.element || !composerHasText(composer.element))
+        ? 'ok'
+        : 'degraded';
+
+    return {
+      health,
+      recognized,
+      composer: selectorProbe(composer),
+      sendControl: selectorProbe(send),
+      stopControl: selectorProbe(stop),
+      transcript: selectorProbe(transcript),
+      assistantTurn: selectorProbe(assistantTurn),
+      isGenerating: isGeneratingControl,
+      composerReady: composerReady(composer.element),
+      sendControlPresent: Boolean(send.element),
+      blockingReason: detectBlockingReason(this.document),
+      confirmationVisible: hasConfirmation(this.document),
+    };
+  }
+
+  getConversationTurns(limit: number = DEFAULT_CONVERSATION_TURN_LIMIT): ConversationTurnSample[] {
+    const bounded = Math.max(0, limit);
+    if (bounded === 0) return [];
+    // Bound the scan before cloning: a long conversation can hold hundreds of nodes and this
+    // runs on every panel refresh.
+    const nodes = [...this.document.querySelectorAll<HTMLElement>(CONVERSATION_MESSAGE_SELECTOR)].slice(-(bounded * 3));
+    const seenTurns = new Set<HTMLElement>();
+    const turns: ConversationTurnSample[] = [];
+
+    for (const node of nodes) {
+      const root = assistantTurnRoot(node);
+      if (seenTurns.has(root)) continue;
+      seenTurns.add(root);
+      const text = cleanText(node);
+      if (!text) continue;
+      turns.push({ role: node.matches(USER_ROLE_SELECTOR) ? 'user' : 'assistant', text });
+    }
+
+    return turns.slice(-bounded);
   }
 
   getDiagnosticSummary(): string {

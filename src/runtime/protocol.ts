@@ -37,6 +37,12 @@ export type BridgeControlRequest =
       error?: string;
     };
 
+export type HandoffControlRequest =
+  /** Opens a new-chat tab for a prepared handoff brief and remembers it as the import target. */
+  | { type: 'handoffOpen'; url: string }
+  /** Returns `claimed: true` only for the tab the extension opened for the current handoff. */
+  | { type: 'handoffClaim' };
+
 export interface BridgeRunMessage {
   type: 'bridgeRun';
   jobId: string;
@@ -45,7 +51,7 @@ export interface BridgeRunMessage {
   inputs: Record<string, string>;
 }
 
-export type ExtensionRequest = BackgroundRequest | BridgeControlRequest;
+export type ExtensionRequest = BackgroundRequest | BridgeControlRequest | HandoffControlRequest;
 
 export interface BackgroundEnvelope {
   ok: boolean;

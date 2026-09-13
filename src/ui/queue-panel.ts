@@ -1,3 +1,6 @@
+import type { AdapterInterfaceReport } from '../adapter/chatgpt-adapter';
+import type { ContextPressure } from '../context/pressure';
+import { formatContextPressure } from '../context/pressure';
 import type { ConversationQueue, QueueItem } from '../domain/types';
 import type { WorkflowRun } from '../flowrun/events';
 import { WORKFLOW_PRESETS } from '../flowrun/presets';
@@ -18,6 +21,22 @@ export interface QueuePanelActions {
   runWorkflow?: (inputs: Record<string, string>) => MaybePromise;
   clearWorkflow?: () => MaybePromise;
   enableBridge?: () => MaybePromise;
+  prepareHandoff?: () => MaybePromise;
+  openHandoff?: () => MaybePromise;
+  setContextCapacity?: (tokens: number | null) => MaybePromise;
+}
+
+export interface QueuePanelContextView {
+  pressure?: ContextPressure;
+  capacityOverride?: number;
+  handoff?: {
+    status: 'none' | 'capturing' | 'ready';
+    carriedItems: number;
+  };
+  adapter?: {
+    report: AdapterInterfaceReport;
+    diagnostics: string;
+  };
 }
 
 export interface QueuePanelWorkflowView {
@@ -25,6 +44,7 @@ export interface QueuePanelWorkflowView {
   run?: WorkflowRun;
   error?: string;
   bridgeState?: 'disabled' | 'enabling' | 'connected' | 'disconnected';
+  context?: QueuePanelContextView;
 }
 
 const PANEL_COLLAPSED_KEY = 'chatgpt-queue:panel-collapsed';
@@ -78,6 +98,33 @@ const visualSignature = (queue: ConversationQueue, notice: string | undefined, w
   } : null,
   workflowError: workflowView.error ?? null,
   bridgeState: workflowView.bridgeState ?? 'disabled',
+  context: workflowView.context ? {
+    pressure: workflowView.context.pressure
+      ? {
+          level: workflowView.context.pressure.level,
+          percent: Math.round(workflowView.context.pressure.ratio * 100),
+          estimatedTokens: workflowView.context.pressure.estimatedTokens,
+          capacityTokens: workflowView.context.pressure.capacity.usableTokens,
+        }
+      : null,
+    capacityOverride: workflowView.context.capacityOverride ?? null,
+    handoffStatus: workflowView.context.handoff?.status ?? 'none',
+    carriedItems: workflowView.context.handoff?.carriedItems ?? 0,
+    adapter: workflowView.context.adapter
+      ? {
+          health: workflowView.context.adapter.report.health,
+          recognized: workflowView.context.adapter.report.recognized,
+          isGenerating: workflowView.context.adapter.report.isGenerating,
+          composerReady: workflowView.context.adapter.report.composerReady,
+          blockingReason: workflowView.context.adapter.report.blockingReason,
+          confirmationVisible: workflowView.context.adapter.report.confirmationVisible,
+          sendControl: workflowView.context.adapter.report.sendControl.status,
+          stopControl: workflowView.context.adapter.report.stopControl.status,
+          transcript: workflowView.context.adapter.report.transcript.status,
+          assistantTurn: workflowView.context.adapter.report.assistantTurn.status,
+        }
+      : null,
+  } : null,
 });
 
 export class QueuePanel {
@@ -85,6 +132,7 @@ export class QueuePanel {
   private lastConversationKey?: string;
   private lastVisualSignature?: string;
   private selectedPresetId = '';
+  private adapterDetailsOpen = false;
   private collapsed = readCollapsedPreference();
 
   constructor(private readonly host: HTMLElement, private readonly actions: QueuePanelActions) {
@@ -102,6 +150,7 @@ export class QueuePanel {
     const newMessageDraft = existingNewMessage?.value ?? '';
     const queuedDrafts = new Map<string, string>();
     const workflowDrafts = new Map<string, string>();
+    let capacityDraft: string | undefined;
     if (sameConversation) {
       for (const input of this.root.querySelectorAll<HTMLTextAreaElement>('textarea[data-item-id]')) {
         if (input.dataset.itemId) queuedDrafts.set(input.dataset.itemId, input.value);
@@ -109,6 +158,7 @@ export class QueuePanel {
       for (const input of this.root.querySelectorAll<HTMLInputElement>('input[data-workflow-input]')) {
         if (input.dataset.workflowInput) workflowDrafts.set(input.dataset.workflowInput, input.value);
       }
+      capacityDraft = this.root.querySelector<HTMLInputElement>('input[data-role="context-capacity"]')?.value;
     }
 
     const livePreset = this.root.querySelector<HTMLSelectElement>('[data-role="workflow-preset"]');
@@ -118,6 +168,7 @@ export class QueuePanel {
     const focusedNewMessage = active instanceof HTMLTextAreaElement && active.dataset.role === 'new-message';
     const focusedItemId = active instanceof HTMLTextAreaElement ? active.dataset.itemId : undefined;
     const focusedWorkflowInput = active instanceof HTMLInputElement ? active.dataset.workflowInput : undefined;
+    const focusedCapacity = active instanceof HTMLInputElement && active.dataset.role === 'context-capacity';
     const editableActive = active instanceof HTMLTextAreaElement || active instanceof HTMLInputElement ? active : null;
     const selectionStart = editableActive?.selectionStart ?? null;
     const selectionEnd = editableActive?.selectionEnd ?? null;
@@ -229,6 +280,51 @@ export class QueuePanel {
     const bridgeControl = bridgeState === 'connected'
       ? '<div class="bridge-row"><span>CLI bridge</span><span class="bridge-state connected">Connected</span></div>'
       : `<div class="bridge-row"><span>CLI bridge</span><span class="bridge-state">${bridgeState === 'enabling' ? 'Enabling…' : bridgeState === 'disconnected' ? 'Disconnected' : 'Disabled'}</span><button class="ghost" data-action="enable-bridge"${bridgeState === 'enabling' ? ' disabled' : ''}>${bridgeState === 'disabled' ? 'Enable' : 'Reconnect'}</button></div>`;
+
+    const contextView = workflowView.context ?? {};
+    const pressure = contextView.pressure;
+    const adapterView = contextView.adapter;
+    const adapterHealth = adapterView?.report.health ?? 'unrecognized';
+    const meterWidth = pressure ? Math.max(0, Math.min(100, Math.round(pressure.ratio * 100))) : 0;
+    const handoffStatus = contextView.handoff?.status ?? 'none';
+    const handoffCarried = contextView.handoff?.carriedItems ?? 0;
+    const queueActivelySending = queue.status === 'running' || queue.items.some((item) => item.state === 'sending' || item.state === 'running');
+    const handoffBlocked = queueActivelySending || flowRunRunning || adapterHealth !== 'ok';
+    const adapterChipLabel = adapterHealth === 'ok'
+      ? 'interface ok'
+      : adapterHealth === 'degraded'
+        ? 'interface degraded'
+        : 'interface unrecognized';
+    const handoffControl = handoffStatus === 'capturing'
+      ? '<span class="handoff-state">Preparing handoff brief…</span>'
+      : handoffStatus === 'ready'
+        ? `<span class="handoff-state ready">Handoff ready · ${handoffCarried} item${handoffCarried === 1 ? '' : 's'} carried</span>
+           <button class="primary" data-action="open-handoff">Continue in new chat</button>`
+        : `<button data-action="prepare-handoff"${handoffBlocked ? ' disabled' : ''}>Compact &amp; continue</button>
+           <span class="handoff-hint">${adapterHealth !== 'ok'
+             ? 'The adapter must recognize this page before a handoff can be prepared.'
+             : handoffBlocked
+               ? 'Available once the queue is idle. Queued follow-ups are carried over.'
+               : 'Asks ChatGPT for a handoff brief, then opens a fresh chat with it.'}</span>`;
+    const contextSection = `<section class="context-section">
+      <div class="context-heading">
+        <div><strong>Context</strong><span class="context-subtitle">local estimate</span></div>
+        <span class="adapter-chip adapter-${adapterHealth}" data-role="adapter-health">${adapterChipLabel}</span>
+      </div>
+      ${pressure
+        ? `<div class="meter" aria-hidden="true"><div class="meter-fill level-${pressure.level}" style="width:${meterWidth}%"></div></div>
+           <div class="meter-detail" data-role="context-detail">${escapeHtml(formatContextPressure(pressure))}</div>`
+        : '<div class="meter-detail">Context pressure unavailable.</div>'}
+      ${adapterView
+        ? `<button class="ghost context-disclosure" data-action="toggle-adapter-detail">Interface detail</button>
+           <pre class="adapter-detail" data-role="adapter-detail"${this.adapterDetailsOpen ? '' : ' hidden'}>${escapeHtml(adapterView.diagnostics)}</pre>`
+        : ''}
+      <div class="handoff-row">${handoffControl}</div>
+      <label class="capacity-row">
+        <span>Capacity override (tokens)</span>
+        <input type="number" min="1000" step="1000" inputmode="numeric" data-role="context-capacity" placeholder="auto" value="${contextView.capacityOverride === undefined ? '' : String(contextView.capacityOverride)}" />
+      </label>
+    </section>`;
 
 
     this.root.innerHTML = `
@@ -504,6 +600,74 @@ export class QueuePanel {
         .bridge-row > :first-child { color: #ddd; font-weight: 600; }
         .bridge-state { margin-left: auto; }
         .bridge-state.connected { color: #9fd3a9; }
+        .context-section {
+          margin-top: 12px;
+          padding-top: 12px;
+          border-top: 1px solid rgba(255,255,255,.1);
+          display: grid;
+          gap: 8px;
+        }
+        .context-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+        .context-heading > div { display: flex; align-items: baseline; gap: 7px; }
+        .context-subtitle { color: #888; font-size: 11px; }
+        .adapter-chip {
+          padding: 3px 7px;
+          border: 1px solid rgba(255,255,255,.14);
+          border-radius: 999px;
+          color: #bbb;
+          font-size: 10px;
+          letter-spacing: .06em;
+          text-transform: uppercase;
+        }
+        .adapter-chip.adapter-ok { color: #9fd3a9; border-color: rgba(159,211,169,.35); }
+        .adapter-chip.adapter-degraded { color: #d7b987; border-color: rgba(215,185,135,.35); }
+        .adapter-chip.adapter-unrecognized { color: #ffb4b4; border-color: rgba(255,140,140,.35); }
+        .meter { height: 7px; border-radius: 999px; background: rgba(255,255,255,.09); overflow: hidden; }
+        .meter-fill { height: 100%; border-radius: 999px; background: #8d8d8d; transition: width .2s ease; }
+        .meter-fill.level-watch { background: #d7b987; }
+        .meter-fill.level-compact { background: #e2a35f; }
+        .meter-fill.level-critical { background: #ff8b8b; }
+        .meter-detail { color: #aaa; font-size: 11px; line-height: 1.4; overflow-wrap: anywhere; }
+        .context-disclosure { justify-self: start; min-height: 28px; padding: 3px 8px; font-size: 11px; }
+        .adapter-detail {
+          margin: 0;
+          padding: 8px 9px;
+          max-height: 160px;
+          border: 1px solid rgba(255,255,255,.08);
+          border-radius: 9px;
+          background: rgba(0,0,0,.28);
+          color: #cfcfcf;
+          font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+          white-space: pre-wrap;
+          overflow: auto;
+          overflow-wrap: anywhere;
+        }
+        .handoff-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .handoff-state { color: #ddd; font-size: 12px; }
+        .handoff-state.ready { color: #9fd3a9; }
+        .handoff-hint { color: #999; font-size: 11px; line-height: 1.4; }
+        .capacity-row {
+          display: grid;
+          grid-template-columns: minmax(0,1fr) 112px;
+          align-items: center;
+          gap: 8px;
+          color: #aaa;
+          font-size: 11px;
+        }
+        .capacity-row input {
+          min-height: 32px;
+          border: 1px solid rgba(255,255,255,.14);
+          border-radius: 9px;
+          outline: none;
+          background: #232323;
+          color: #f5f5f5;
+          padding: 5px 8px;
+          font: inherit;
+        }
+        .capacity-row input:focus {
+          border-color: rgba(255,255,255,.38);
+          box-shadow: 0 0 0 3px rgba(255,255,255,.06);
+        }
         @media (max-width: 520px) {
           .dock { right: 8px; bottom: 8px; width: calc(100vw - 16px); }
           .body { max-height: 58vh; }
@@ -532,6 +696,7 @@ export class QueuePanel {
               <button data-action="add">Add</button>
             </div>
             ${rows ? `<ul>${rows}</ul>` : '<div class="empty">No queued messages.</div>'}
+            ${contextSection}
             ${workflowSection}
             ${bridgeControl}
           </div>
@@ -550,6 +715,8 @@ export class QueuePanel {
         const name = input.dataset.workflowInput;
         if (name && workflowDrafts.has(name)) input.value = workflowDrafts.get(name)!;
       }
+      const capacityInput = this.root.querySelector<HTMLInputElement>('input[data-role="context-capacity"]');
+      if (capacityInput && capacityDraft !== undefined) capacityInput.value = capacityDraft;
     }
 
     this.bind();
@@ -562,7 +729,9 @@ export class QueuePanel {
         ? this.root.querySelector<HTMLTextAreaElement>(`textarea[data-item-id="${CSS.escape(focusedItemId)}"]`)
         : focusedWorkflowInput
           ? this.root.querySelector<HTMLInputElement>(`input[data-workflow-input="${CSS.escape(focusedWorkflowInput)}"]`)
-          : null;
+          : focusedCapacity
+            ? this.root.querySelector<HTMLInputElement>('input[data-role="context-capacity"]')
+            : null;
     if (focusTarget) {
       focusTarget.focus();
       if (selectionStart !== null && selectionEnd !== null) {
@@ -622,6 +791,24 @@ export class QueuePanel {
       const presetId = workflowPreset?.value ?? '';
       if (!presetId || !this.actions.loadWorkflowPreset) return;
       invoke(() => this.actions.loadWorkflowPreset!(presetId));
+    });
+
+    this.root.querySelector('[data-action="toggle-adapter-detail"]')?.addEventListener('click', () => {
+      this.adapterDetailsOpen = !this.adapterDetailsOpen;
+      const detail = this.root.querySelector<HTMLElement>('[data-role="adapter-detail"]');
+      if (detail) detail.hidden = !this.adapterDetailsOpen;
+    });
+    this.root.querySelector('[data-action="prepare-handoff"]')?.addEventListener('click', () => invoke(this.actions.prepareHandoff));
+    this.root.querySelector('[data-action="open-handoff"]')?.addEventListener('click', () => invoke(this.actions.openHandoff));
+    this.root.querySelector<HTMLInputElement>('input[data-role="context-capacity"]')?.addEventListener('change', () => {
+      if (!this.actions.setContextCapacity) return;
+      const input = this.root.querySelector<HTMLInputElement>('input[data-role="context-capacity"]');
+      if (!input) return;
+      const trimmed = input.value.trim();
+      const parsed = trimmed === '' ? null : Number(trimmed);
+      const next = parsed === null || !Number.isFinite(parsed) ? null : parsed;
+      input.value = next === null ? '' : String(next);
+      invoke(() => this.actions.setContextCapacity!(next));
     });
 
     this.root.querySelector('[data-action="clear-workflow"]')?.addEventListener('click', () => invoke(this.actions.clearWorkflow));
