@@ -22,6 +22,14 @@ export class UnsupportedStorageVersionError extends Error {
 
 const emptyState = (): PersistedState => ({ version: STORAGE_VERSION, queues: {} });
 
+const isPristinePlaceholder = (queue: ConversationQueue): boolean =>
+  queue.items.length === 0
+  && queue.status === 'completed'
+  && queue.runtime.phase === 'idle'
+  && Object.keys(queue.runtime).length === 1
+  && queue.owner === undefined
+  && queue.blockedReason === undefined;
+
 export class QueueRepository {
   constructor(private readonly storage: StorageAreaLike) {}
 
@@ -63,7 +71,18 @@ export class QueueRepository {
     const state = await this.load();
     const source = state.queues[fromKey];
     if (!source) throw new Error(`Queue not found for ${fromKey}`);
-    if (state.queues[toKey]) throw new Error(`Target queue already exists for ${toKey}`);
+    const target = state.queues[toKey];
+
+    if (target) {
+      if (isPristinePlaceholder(source)) {
+        delete state.queues[fromKey];
+        await this.save(state);
+        return structuredClone(target);
+      }
+      if (!isPristinePlaceholder(target)) {
+        throw new Error(`Target queue already exists for ${toKey}`);
+      }
+    }
 
     const migrated: ConversationQueue = { ...source, conversationKey: toKey, updatedAt: now };
     delete state.queues[fromKey];
