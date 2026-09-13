@@ -1,0 +1,64 @@
+name: Verify
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Commit, branch, or tag to verify. Defaults to the ref this workflow runs for.
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22.22.2
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Version consistency
+        run: npm run check:version
+
+      - name: Unit and integration tests
+        run: npm test
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Production build
+        run: npm run build
+
+      - name: CLI build
+        run: npm run build:cli
+
+      - name: Native host build
+        run: npm run build:native-host
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Browser E2E
+        run: npm run test:e2e
+
+      - name: Upload production extension
+        uses: actions/upload-artifact@v7
+        with:
+          name: chatgpt-queue-dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
