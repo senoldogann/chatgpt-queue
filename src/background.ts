@@ -2,6 +2,7 @@ declare const __FLOWRUN_E2E__: boolean;
 
 import { decideBridgeJobOwnership } from './bridge/job-authorization';
 import { BridgeJobRepository, chromeBridgeStorageArea } from './bridge/job-repository';
+import { BridgeReloadHandoff, chromeBridgeReloadStorageArea } from './bridge/reload-handoff';
 import { NativeBridgeService, type NativePortLike } from './bridge/native-service';
 import { TargetRegistry } from './bridge/target-registry';
 import { QueueCoordinator } from './coordinator/queue-coordinator';
@@ -13,9 +14,11 @@ import { chromeStorageArea, QueueRepository } from './storage/queue-repository';
 const coordinator = new QueueCoordinator(new QueueRepository(chromeStorageArea()));
 const bridgeRepository = new BridgeJobRepository(chromeBridgeStorageArea());
 const targetRegistry = new TargetRegistry();
+const bridgeReloadHandoff = new BridgeReloadHandoff(chromeBridgeReloadStorageArea());
 const nativeBridge = new NativeBridgeService({
   hasPermission: () => chrome.permissions.contains({ permissions: ['nativeMessaging'] }),
   requestPermission: () => chrome.permissions.request({ permissions: ['nativeMessaging'] }),
+  nativeApiAvailable: () => typeof chrome.runtime.connectNative === 'function',
   connectNative: (name) => chrome.runtime.connectNative(name) as unknown as NativePortLike,
   consumeLastError: () => { void chrome.runtime.lastError; },
   repository: bridgeRepository,
@@ -61,8 +64,14 @@ const handleBridgeRequest = async (request: BridgeControlRequest, tabId: number)
     case 'bridgeState':
       await nativeBridge.ensureConnected();
       return { state: nativeBridge.state() };
-    case 'bridgeEnable':
-      return { enabled: await nativeBridge.enable(), state: nativeBridge.state() };
+    case 'bridgeEnable': {
+      const result = await nativeBridge.enable();
+      if (result.reloadRequired) {
+        await bridgeReloadHandoff.arm(tabId);
+        chrome.runtime.reload();
+      }
+      return result;
+    }
     case 'bridgeJobUpdate': {
       let record = await bridgeRepository.get(request.jobId);
       if (!record) throw new Error('bridge-job-not-found');
@@ -82,7 +91,13 @@ const handleBridgeRequest = async (request: BridgeControlRequest, tabId: number)
   }
 };
 
-void nativeBridge.ensureConnected();
+void (async () => {
+  const reloadTabId = await bridgeReloadHandoff.consume();
+  await nativeBridge.ensureConnected();
+  if (reloadTabId !== undefined) {
+    await chrome.tabs.reload(reloadTabId);
+  }
+})().catch(() => undefined);
 
 chrome.runtime.onMessage.addListener((rawRequest: ExtensionRequest, sender, sendResponse: (response: BackgroundEnvelope) => void) => {
   const tabId = sender.tab?.id;
