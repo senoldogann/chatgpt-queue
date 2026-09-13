@@ -171,6 +171,7 @@ const en = {
   'reason.assistant-turn-not-advanced': 'No new assistant response appeared',
   'reason.queue-item-not-completed': 'A queue item did not complete',
   'reason.queue-item-not-created': 'A queue item could not be created',
+  'reason.completion-not-observed': 'The page went idle but no completed response could be confirmed',
   'reason.flowrun-queue-item-missing': 'The workflow queue item is missing',
 } as const;
 
@@ -335,6 +336,7 @@ const tr: Record<MessageKey, string> = {
   'reason.assistant-turn-not-advanced': 'Yeni bir asistan yanıtı görünmedi',
   'reason.queue-item-not-completed': 'Bir kuyruk öğesi tamamlanmadı',
   'reason.queue-item-not-created': 'Bir kuyruk öğesi oluşturulamadı',
+  'reason.completion-not-observed': 'Sayfa boşa çıktı ama tamamlanmış bir yanıt doğrulanamadı',
   'reason.flowrun-queue-item-missing': 'İş akışının kuyruk öğesi bulunamadı',
 };
 

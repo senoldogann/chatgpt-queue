@@ -225,7 +225,16 @@ describe('QueueRunner', () => {
       composerReady: true,
     });
 
+    // The legacy shortcut must not complete this item. It does enter the bounded stability wait
+    // instead of sitting in `generating` forever, and blocks once that deadline passes with no
+    // provable new turn — still without completing anything.
     await new QueueRunner(adapter, backend, { now: () => 120_000 }).evaluate('conv:a', false);
-    expect(backend.calls).toEqual([]);
+    expect(backend.calls).toEqual(['waitingStable']);
+
+    backend.calls.length = 0;
+    backend.current.runtime.phase = 'waiting_stable_completion';
+    backend.current.runtime.stableWaitStartedAt = 120_000;
+    await new QueueRunner(adapter, backend, { now: () => 180_000 }).evaluate('conv:a', false);
+    expect(backend.calls).toEqual(['block:completion-not-observed']);
   });
 });

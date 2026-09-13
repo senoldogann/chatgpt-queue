@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { COMPLETION_QUIET_GRACE_MS, evaluateRuntime } from '../src/domain/state-machine';
+import { COMPLETION_QUIET_GRACE_MS, COMPLETION_STALL_DEADLINE_MS, evaluateRuntime } from '../src/domain/state-machine';
 import type { PageSnapshot, RuntimePhase } from '../src/domain/types';
 
 const safe = (overrides: Partial<PageSnapshot> = {}): PageSnapshot => ({
@@ -91,6 +91,52 @@ describe('runtime state machine', () => {
       generationObserved: true,
       completionWaitMs: COMPLETION_QUIET_GRACE_MS * 100,
     })).toEqual({ action: 'generation_started', controlObserved: true });
+  });
+
+  it('bounds the wait once the page is idle but no new turn can be proven', () => {
+    // A runtime that knows its baseline turn enters the bounded stability wait instead of sitting in
+    // `generating` forever.
+    expect(evaluateRuntime({
+      phase: 'generating',
+      snapshot: safe({ assistantMessageCount: 1, latestAssistantTurnKey: 'turn-base' }),
+      baselineAssistantCount: 1,
+      baselineAssistantTurnKey: 'turn-base',
+      generationObserved: true,
+    })).toEqual({ action: 'wait_for_stability' });
+
+    const stalled = (completionWaitMs: number) => evaluateRuntime({
+      phase: 'waiting_stable_completion',
+      snapshot: safe({ assistantMessageCount: 1, latestAssistantTurnKey: 'turn-base' }),
+      baselineAssistantCount: 1,
+      baselineAssistantTurnKey: 'turn-base',
+      generationObserved: true,
+      completionWaitMs,
+    });
+
+    expect(stalled(COMPLETION_STALL_DEADLINE_MS - 1)).toEqual({ action: 'wait' });
+    expect(stalled(COMPLETION_STALL_DEADLINE_MS)).toEqual({ action: 'block', reason: 'completion-not-observed' });
+  });
+
+  it('never blocks on missing completion evidence, and keeps the stricter rule without turn identity', () => {
+    // No baseline turn key: the page may have been idle for a long time, but this runtime cannot
+    // judge a stall, so it keeps waiting rather than blocking.
+    expect(evaluateRuntime({
+      phase: 'generating',
+      snapshot: safe({ assistantMessageCount: 3, latestAssistantTurnKey: 'assistant:3:x' }),
+      baselineAssistantCount: 3,
+      generationObserved: true,
+      completionWaitMs: COMPLETION_STALL_DEADLINE_MS * 100,
+    })).toEqual({ action: 'wait' });
+
+    // Generation was never observed, so there is no evidence to conclude anything about.
+    expect(evaluateRuntime({
+      phase: 'waiting_stable_completion',
+      snapshot: safe({ assistantMessageCount: 1, latestAssistantTurnKey: 'turn-base' }),
+      baselineAssistantCount: 1,
+      baselineAssistantTurnKey: 'turn-base',
+      generationObserved: false,
+      completionWaitMs: COMPLETION_STALL_DEADLINE_MS * 100,
+    })).toEqual({ action: 'wait' });
   });
 
   it('waits through a transient unrecognized DOM until it becomes stable', () => {

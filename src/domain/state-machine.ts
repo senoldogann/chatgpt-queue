@@ -23,6 +23,19 @@ export interface RuntimeEvaluationInput {
  */
 export const COMPLETION_QUIET_GRACE_MS = 5_000;
 
+/**
+ * Upper bound on how long a runtime whose baseline assistant turn is known may wait for that turn
+ * to actually advance once the page has gone idle.
+ *
+ * Generation was observed and the composer is ready again, so a provable completion should appear
+ * almost immediately; the quiet window above is measured from the moment that wait begins, not from
+ * the start of the response, so a long generation is never punished by it. Waiting indefinitely in
+ * this situation is what silently turns "the answer finished and nothing noticed" into a queue that
+ * claims to be running forever. Blocking instead keeps that visible, resends nothing, and still
+ * allows a resume once the page can prove a completion.
+ */
+export const COMPLETION_STALL_DEADLINE_MS = 60_000;
+
 const blockReason = (snapshot: PageSnapshot): string | null => {
   if (!snapshot.domRecognized && snapshot.domStable) return 'dom-unrecognized';
   if (snapshot.confirmationVisible) return 'confirmation-required';
@@ -77,12 +90,22 @@ export function evaluateRuntime(input: RuntimeEvaluationInput): RuntimeDecision 
       if (snapshot.isGenerating && !generationObserved) return { action: 'generation_started', controlObserved: true };
       if (snapshot.isGenerating) return { action: 'wait' };
       if (completionEvidence && hasCompletionTarget && pageReady) return { action: 'wait_for_stability' };
+      // A response was observed, a baseline turn exists to compare against, and the page is idle —
+      // yet no new turn can be proven. Entering the bounded stability wait gives the missing evidence
+      // a deadline instead of waiting here forever. Runtimes without turn identity keep the stricter
+      // rule: they may only leave this phase with explicit evidence.
+      if (generationObserved && pageReady && baselineAssistantTurnKey !== undefined && snapshot.latestAssistantTurnKey !== undefined) {
+        return { action: 'wait_for_stability' };
+      }
       return { action: 'wait' };
 
     case 'waiting_stable_completion': {
       if (snapshot.isGenerating) return { action: 'generation_started', controlObserved: true };
       const quiet = snapshot.domStable || (completionWaitMs ?? 0) >= COMPLETION_QUIET_GRACE_MS;
       if (completionEvidence && hasCompletionTarget && pageReady && quiet) return { action: 'complete' };
+      if (completionEvidence && !hasCompletionTarget && pageReady && (completionWaitMs ?? 0) >= COMPLETION_STALL_DEADLINE_MS) {
+        return { action: 'block', reason: 'completion-not-observed' };
+      }
       return { action: 'wait' };
     }
 
