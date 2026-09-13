@@ -22,6 +22,8 @@ The extension advances the queue by observing the real ChatGPT page state. It do
 - Non-mutating adapter interface health, with on-demand diagnostics, so ChatGPT DOM drift is visible before it blocks a queue.
 - A local context-pressure estimate driven by a runtime-resolved capacity instead of a hardcoded model limit.
 - **Compact & continue**: ask the current conversation for a validated handoff brief, then open a fresh chat seeded with that brief and the follow-ups you had queued.
+- **English and Turkish panel UI**, switchable at any time from the panel header (`Auto`, `EN`, `TR`); `Auto` follows the browser language.
+- **Built-in usage guide**: a step-by-step walkthrough that highlights the real control each step describes, with visible progress, directly in the panel.
 
 ## Requirements
 
@@ -62,6 +64,7 @@ Built-in workflows:
 - **Root Cause Debugging** — separates facts from assumptions, ranks hypotheses, traces the causal chain, and proposes the smallest regression-tested fix.
 - **Release Gate** — defines the release contract, ranks credible risk, audits evidence, and returns `GO`, `GO WITH CONDITIONS`, or `NO-GO`.
 - **Implementation Plan** — converts requirements into a bounded contract, minimal architecture, incremental tasks, and explicit completion gates.
+- **Open Code Review** — a precision-first review adapted from Alibaba's [Open Code Review](https://github.com/alibaba/open-code-review) (Apache-2.0): deterministic scope selection, rule-matched defect detection, an independent positioning pass, and a reflection pass that drops unproven findings. It is a prompt workflow derived from that published methodology; the `ocr` binary is not bundled and no external service is contacted.
 
 Each preset contains chained ChatGPT steps and requires non-empty output at every stage. Presets are copied before use, so a selected workflow cannot mutate the built-in catalog. **Load custom workflow** remains available for developer-authored files.
 
@@ -212,6 +215,8 @@ Edge uses the equivalent extension-management page and unpacked-extension flow.
 
 ## Usage
 
+New to the panel? Press the **?** button in the panel header. The usage guide walks through every control one step at a time, highlights the control each step is talking about, and shows progress as you advance. It is non-destructive: it only scrolls and highlights, and the panel keeps working while it is open.
+
 1. Open a ChatGPT conversation.
 2. Add one or more follow-up messages in the Queue panel.
 3. Reorder or edit queued items if needed.
@@ -277,7 +282,7 @@ The project does not read browser cookies or credentials, call the OpenAI API, s
 - `src/coordinator/` — durable mutations, ownership leases, dispatch reservation, recovery.
 - `src/adapter/` — ChatGPT DOM boundary.
 - `src/runtime/` — extension RPC/client/runner and conversation identity.
-- `src/ui/` — Shadow DOM queue panel.
+- `src/ui/` — Shadow DOM queue panel, the EN/TR message catalog, the in-panel usage guide steps, and durable UI preferences.
 - `src/context/` — runtime-resolved context capacity, the local pressure estimate, and the compaction handoff (brief prompt, validation, seed, bounded storage).
 - `src/flowrun/` — FlowRun schema, templates, receipts, assertions, deterministic engine, bounded run storage, and queue-backed browser runtime.
 - `src/cli/` — FlowRun CLI commands and local mailbox client.

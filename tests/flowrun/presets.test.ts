@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getWorkflowPreset, WORKFLOW_PRESETS } from '../../src/flowrun/presets';
+import { getWorkflowPreset, localizedPresetText, WORKFLOW_PRESETS } from '../../src/flowrun/presets';
 import { validateWorkflowDocument } from '../../src/flowrun/schema';
 
 describe('FlowRun workflow presets', () => {
@@ -10,9 +10,23 @@ describe('FlowRun workflow presets', () => {
       'root-cause-debugging',
       'release-gate',
       'implementation-plan',
+      'open-code-review',
     ]);
     expect(new Set(WORKFLOW_PRESETS.map((preset) => preset.id)).size).toBe(WORKFLOW_PRESETS.length);
     expect(WORKFLOW_PRESETS.every((preset) => preset.label.trim().length > 0 && preset.description.trim().length > 0)).toBe(true);
+  });
+
+  it('carries Turkish UI text for every preset but never translates prompts', () => {
+    for (const preset of WORKFLOW_PRESETS) {
+      const tr = localizedPresetText(preset, 'tr');
+      const en = localizedPresetText(preset, 'en');
+      expect(tr.label.trim(), preset.id).not.toBe('');
+      expect(tr.description.trim(), preset.id).not.toBe('');
+      expect(en.label).toBe(preset.label);
+      expect(en.description).toBe(preset.description);
+      expect(preset.workflow.steps.every((step) => !/[çğıöşüÇĞİÖŞÜ]/.test(step.prompt))).toBe(true);
+    }
+    expect(localizedPresetText(WORKFLOW_PRESETS[0]!, 'tr').label).toBe('Yayına Hazırlık');
   });
 
   it('keeps every built-in workflow valid, chained, and fail-closed on empty model output', () => {
