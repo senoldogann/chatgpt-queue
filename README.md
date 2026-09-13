@@ -272,6 +272,8 @@ The project does not read browser cookies or credentials, call the OpenAI API, s
 - ChatGPT is a web application whose DOM can change. All ChatGPT-specific selectors and heuristics are isolated in `src/adapter/dom-chatgpt-adapter.ts`; an unrecognized structure blocks the queue rather than guessing.
 - The extension can observe only UI state exposed by the current ChatGPT page. It cannot prove server-side delivery after an ambiguous click, which is why unresolved sends are never retried automatically.
 - A queue is tied to the ChatGPT conversation identity derived from the current URL. Temporary new-chat state is migrated once a real `/c/<conversation-id>` URL appears.
+- Reloading or updating the extension orphans the content scripts already running in open ChatGPT tabs. Such a page can neither read nor write its queue until it is reloaded, so the panel detects that state and reports **Disconnected** with a reload hint instead of continuing to show the queue as running. The persisted queue is untouched and resumes when the page is reloaded.
+- A queue whose owner lease lapses while work is in flight (a tab that crashed, was frozen, or was discarded) is reported as stalled by any tab that opens it. Recovery is explicit: reloading the page takes the lease and re-evaluates from the page's real state.
 - Browser notifications depend on the browser/OS notification environment.
 - The context percentage is a character-based estimate, not token accounting; ChatGPT Web exposes no usage counter. The adapter interface check reports only what the current page structure proves, and it does not verify the model or plan.
 

@@ -802,6 +802,31 @@ test('recovers an unresolved send after the MV3 service worker is stopped and re
   expect(await sentEvents(page, 'worker-restart')).toHaveLength(1);
 });
 
+test('reports a disconnected panel instead of a frozen running queue after an extension reload', async ({ extensionContext, extensionWorker }) => {
+  test.setTimeout(60_000);
+  const page = await openFixture(extensionContext, '/c/orphaned-script');
+  await addMessage(page, 'orphan guard');
+  await startQueue(page);
+  await expect.poll(async () => (await sentEvents(page, 'orphaned-script')).length).toBe(1);
+
+  // Reloading the extension replaces the instance behind this page's already-running content
+  // script. The script keeps painting the panel but can no longer read or write the queue, which
+  // used to leave the UI claiming "Running" for a conversation nothing was advancing.
+  await extensionWorker.evaluate(() => chrome.runtime.reload());
+
+  const banner = queueRoot(page).locator('[data-role="stale-banner"]');
+  await expect(banner).toBeVisible({ timeout: 30_000 });
+  await expect(banner).toContainText('Extension reloaded');
+  await expect(queueRoot(page).locator('.status')).toHaveText('Disconnected');
+  await expect(queueRoot(page).locator('[data-role="activity-spinner"]')).toHaveCount(0);
+  // The queue contents stay visible: they are the user's data, not part of the lie.
+  await expect(queueRoot(page)).toContainText('orphan guard');
+
+  // Reloading the page is the documented recovery, and it clears the disconnected state.
+  await page.reload();
+  await expect(queueRoot(page).locator('[data-role="stale-banner"]')).toHaveCount(0);
+});
+
 test('keeps draining a queue while the page never becomes quiescent', async ({ extensionContext, extensionWorker }) => {
   test.setTimeout(60_000);
   const page = await openFixture(extensionContext, '/c/noisy-completion?noisy=1', 'noisy');
