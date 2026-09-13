@@ -90,6 +90,77 @@ const chainedWorkflow = {
   ],
 };
 
+const handoffBrief = [
+  'STATE: the queue runtime stores durable state in chrome.storage.local and the CLI bridge is connected.',
+  'DECISIONS: queue advancement is observation-driven and elapsed time is never used to guess completion.',
+  'OPEN QUESTIONS: whether the current ChatGPT web build exposes any compaction control at all.',
+  'NEXT STEPS: ship the context meter, then validate the handoff path in a real browser session.',
+  'CONSTRAINTS: fail closed on any unrecognized DOM and never resend an ambiguous send.',
+].join('\n');
+
+test('reports the live adapter interface health and a local context estimate in the panel', async ({ extensionContext }) => {
+  const page = await openFixture(extensionContext, '/c/interface-health');
+  const root = queueRoot(page);
+
+  await expect(root.locator('[data-role="adapter-health"]')).toHaveText('interface ok');
+  await expect(root.locator('[data-role="context-detail"]')).toContainText('(est.');
+  await expect(root.locator('[data-action="prepare-handoff"]')).toBeEnabled();
+
+  const detail = root.locator('[data-role="adapter-detail"]');
+  await expect(detail).toBeHidden();
+  await root.locator('[data-action="toggle-adapter-detail"]').click();
+  await expect(detail).toBeVisible();
+  await expect(detail).toContainText('composer=TEXTAREA#prompt-textarea');
+  await expect(detail).toContainText('send-testid=true');
+});
+
+test('compacts a near-limit conversation into a fresh chat and carries the queued follow-ups', async ({ extensionContext, extensionWorker }) => {
+  const page = await openFixture(extensionContext, `/c/handoff-source?auto-complete-ms=50&response=${encodeURIComponent(handoffBrief)}`);
+  const root = queueRoot(page);
+
+  await root.locator('[data-role="new-message"]').fill('carry me one');
+  await root.locator('[data-action="add"]').click();
+  await root.locator('[data-role="new-message"]').fill('carry me two');
+  await root.locator('[data-action="add"]').click();
+  await expect(root.locator('textarea[data-item-id]')).toHaveCount(2);
+
+  await root.locator('[data-action="prepare-handoff"]').click();
+  await expect(root).toContainText('Preparing handoff brief');
+
+  // The brief prompt is dispatched first, ahead of the carried follow-ups.
+  await expect.poll(async () => (await sentEvents(page, 'handoff-source')).length).toBe(1);
+  expect((await sentEvents(page, 'handoff-source'))[0]?.content).toContain('Produce a handoff brief');
+
+  await expect(root).toContainText('Handoff ready');
+  await expect(root).toContainText('2 items carried');
+  // The source queue pauses, so the carried follow-ups are not spent on a conversation at its limit.
+  await expect.poll(async () => (await storedQueue(extensionWorker, 'conv:handoff-source'))?.status).toBe('paused');
+  await page.waitForTimeout(600);
+  expect(await sentEvents(page, 'handoff-source')).toHaveLength(1);
+
+  const newPagePromise = extensionContext.waitForEvent('page');
+  await root.locator('[data-action="open-handoff"]').click();
+  const newPage = await newPagePromise;
+  await expect(queueRoot(newPage)).toBeAttached();
+  await expect(queueRoot(newPage)).toContainText('Handoff imported');
+
+  const tempKey = await extensionWorker.evaluate(async () => {
+    const data = await chrome.storage.local.get('chatgptQueueState');
+    const queues = (data.chatgptQueueState as { queues?: Record<string, unknown> } | undefined)?.queues ?? {};
+    return Object.keys(queues).find((key) => key.startsWith('temp:')) ?? null;
+  });
+  expect(tempKey).toBeTruthy();
+
+  const imported = await storedQueue(extensionWorker, tempKey!);
+  const contents = (imported.items as Array<{ content: string }>).map((item) => item.content);
+  expect(contents).toHaveLength(3);
+  expect(contents[0]).toContain('Handoff brief from the previous conversation');
+  expect(contents[0]).toContain('NEXT STEPS:');
+  expect(contents.slice(1)).toEqual(['carry me one', 'carry me two']);
+  // Nothing is sent into the fresh conversation without an explicit start.
+  expect(await sentEvents(newPage, 'temporary')).toHaveLength(0);
+});
+
 test('loads a built-in professional workflow preset without requiring a file', async ({ extensionContext }) => {
   const page = await openFixture(extensionContext, '/c/preset-load');
   const root = queueRoot(page);

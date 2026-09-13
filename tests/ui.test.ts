@@ -1,9 +1,43 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest';
+import type { AdapterInterfaceReport } from '../src/adapter/chatgpt-adapter';
+import { resolveContextCapacity } from '../src/context/capacity';
+import { measureContextPressure } from '../src/context/pressure';
 import { QueuePanel } from '../src/ui/queue-panel';
 import type { ConversationQueue } from '../src/domain/types';
 import type { WorkflowRun } from '../src/flowrun/events';
 import type { WorkflowDefinition } from '../src/flowrun/schema';
+
+const idleQueue = (): ConversationQueue => ({
+  version: 1,
+  id: 'q',
+  conversationKey: 'conv:a',
+  status: 'completed',
+  items: [],
+  runtime: { phase: 'idle' },
+  createdAt: 1,
+  updatedAt: 2,
+});
+
+const pressure = (capacityTokens: number, turns = 4, charsPerTurn = 1_000) => measureContextPressure(
+  Array.from({ length: turns }, (_, index) => ({ role: index % 2 === 0 ? 'user' as const : 'assistant' as const, text: 'x'.repeat(charsPerTurn) })),
+  resolveContextCapacity({ configuredTokens: capacityTokens }),
+);
+
+const adapterReport = (health: AdapterInterfaceReport['health']): AdapterInterfaceReport => ({
+  health,
+  recognized: health !== 'unrecognized',
+  composer: { status: health === 'unrecognized' ? 'missing' : 'ok', matchedSelector: '#prompt-textarea' },
+  sendControl: { status: health === 'ok' ? 'ok' : 'missing', matchedSelector: 'button[data-testid="send-button"]' },
+  stopControl: { status: 'missing', matchedSelector: null },
+  transcript: { status: 'ok', matchedSelector: 'main' },
+  assistantTurn: { status: 'missing', matchedSelector: null },
+  isGenerating: false,
+  composerReady: health !== 'unrecognized',
+  sendControlPresent: health === 'ok',
+  blockingReason: null,
+  confirmationVisible: false,
+});
 
 const sampleQueue = (): ConversationQueue => ({
   version: 1,
@@ -377,6 +411,94 @@ describe('QueuePanel', () => {
 
     panel.render(idle, undefined, { run: { ...runningRun, status: 'blocked', steps: [{ id: 'step', status: 'blocked', error: 'x' }] }, bridgeState: 'disabled' });
     expect(host.shadowRoot!.querySelector('[data-role="activity-spinner"]')).toBeNull();
+  });
+
+  it('shows the adapter interface health, the context estimate, and a capacity override', async () => {
+    const setContextCapacity = vi.fn();
+    const host = document.createElement('div');
+    document.body.append(host);
+    const panel = new QueuePanel(host, { setContextCapacity });
+
+    panel.render(idleQueue(), undefined, {
+      context: {
+        pressure: pressure(1_400, 4, 1_000),
+        adapter: { report: adapterReport('ok'), diagnostics: 'composer=DIV#prompt-textarea | send-testid=true' },
+      },
+    });
+    let root = host.shadowRoot!;
+    expect(root.querySelector('[data-role="adapter-health"]')?.textContent).toBe('interface ok');
+    expect(root.querySelector('[data-role="context-detail"]')?.textContent).toContain('(est.');
+    expect(root.querySelector('.meter-fill')?.getAttribute('class')).toContain('level-compact');
+
+    const detail = root.querySelector<HTMLElement>('[data-role="adapter-detail"]')!;
+    expect(detail.hidden).toBe(true);
+    root.querySelector<HTMLButtonElement>('[data-action="toggle-adapter-detail"]')!.click();
+    expect(detail.hidden).toBe(false);
+    expect(detail.textContent).toContain('composer=DIV#prompt-textarea');
+
+    const capacity = root.querySelector<HTMLInputElement>('input[data-role="context-capacity"]')!;
+    expect(capacity.value).toBe('');
+    capacity.value = '1310000';
+    capacity.dispatchEvent(new Event('change'));
+    await Promise.resolve();
+    expect(setContextCapacity).toHaveBeenCalledWith(1_310_000);
+
+    // A later rerender keeps an unsaved edit instead of dropping the user's value.
+    capacity.value = '250000';
+    panel.render(idleQueue(), undefined, { context: { pressure: pressure(10_000), adapter: { report: adapterReport('degraded'), diagnostics: 'x' } } });
+    root = host.shadowRoot!;
+    expect(root.querySelector('[data-role="adapter-health"]')?.textContent).toBe('interface degraded');
+    expect(root.querySelector<HTMLInputElement>('input[data-role="context-capacity"]')!.value).toBe('250000');
+  });
+
+  it('only offers a handoff when the adapter is recognized, and never opens one implicitly', async () => {
+    const prepareHandoff = vi.fn();
+    const openHandoff = vi.fn();
+    const host = document.createElement('div');
+    document.body.append(host);
+    const panel = new QueuePanel(host, { prepareHandoff, openHandoff });
+    const context = { pressure: pressure(1_310_000), adapter: { report: adapterReport('ok'), diagnostics: 'diag' } };
+
+    panel.render(idleQueue(), undefined, { context });
+    let root = host.shadowRoot!;
+    const prepare = root.querySelector<HTMLButtonElement>('[data-action="prepare-handoff"]')!;
+    expect(prepare.disabled).toBe(false);
+    await Promise.resolve();
+    expect(prepareHandoff).not.toHaveBeenCalled();
+
+    prepare.click();
+    await Promise.resolve();
+    expect(prepareHandoff).toHaveBeenCalledTimes(1);
+
+    panel.render(idleQueue(), undefined, { context: { ...context, handoff: { status: 'capturing', carriedItems: 0 } } });
+    root = host.shadowRoot!;
+    expect(root.textContent).toContain('Preparing handoff brief');
+    expect(root.querySelector('[data-action="prepare-handoff"]')).toBeNull();
+
+    panel.render(idleQueue(), undefined, { context: { ...context, handoff: { status: 'ready', carriedItems: 3 } } });
+    root = host.shadowRoot!;
+    expect(root.textContent).toContain('3 items carried');
+    root.querySelector<HTMLButtonElement>('[data-action="open-handoff"]')!.click();
+    await Promise.resolve();
+    expect(openHandoff).toHaveBeenCalledTimes(1);
+  });
+
+  it('disables the handoff while the queue is busy or the interface is not recognized', () => {
+    const host = document.createElement('div');
+    document.body.append(host);
+    const panel = new QueuePanel(host, { prepareHandoff: vi.fn() });
+
+    panel.render(sampleQueue(), undefined, {
+      context: { pressure: pressure(1_310_000), adapter: { report: adapterReport('ok'), diagnostics: 'diag' } },
+    });
+    expect(host.shadowRoot!.querySelector<HTMLButtonElement>('[data-action="prepare-handoff"]')!.disabled).toBe(true);
+    expect(host.shadowRoot!.textContent).toContain('Available once the queue');
+
+    panel.render(idleQueue(), undefined, {
+      context: { pressure: pressure(1_310_000), adapter: { report: adapterReport('unrecognized'), diagnostics: 'diag' } },
+    });
+    expect(host.shadowRoot!.querySelector<HTMLButtonElement>('[data-action="prepare-handoff"]')!.disabled).toBe(true);
+    expect(host.shadowRoot!.textContent).toContain('The adapter must recognize this page');
   });
 
   it('renders CLI bridge state and requests enable only from an explicit click', async () => {

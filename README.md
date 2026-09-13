@@ -19,6 +19,9 @@ The extension advances the queue by observing the real ChatGPT page state. It do
 - Temporary new-chat queue keys migrate to the real conversation ID after ChatGPT assigns one.
 - Local completion/blocked notifications.
 - CSS-only running activity indicator in both expanded and collapsed Queue UI.
+- Non-mutating adapter interface health, with on-demand diagnostics, so ChatGPT DOM drift is visible before it blocks a queue.
+- A local context-pressure estimate driven by a runtime-resolved capacity instead of a hardcoded model limit.
+- **Compact & continue**: ask the current conversation for a validated handoff brief, then open a fresh chat seeded with that brief and the follow-ups you had queued.
 
 ## Requirements
 
@@ -149,6 +152,31 @@ The Queue panel shows a CSS-only activity spinner while Queue or FlowRun executi
 
 See `docs/superpowers/specs/2026-09-12-flowrun-v0.3-unattended-cli-bridge-design.md` for the bridge architecture.
 
+## Context and handoff
+
+The Queue panel shows a **Context** section next to the adapter interface state. It answers one question — how close is this conversation to running out of room? — without calling an API or reading anything the page does not already display.
+
+**The capacity is resolved at runtime, never assumed.** `src/context/capacity.ts` resolves it in this order and labels which source won:
+
+1. a capacity the host page declares about itself (`data-context-window-tokens`) — `Reported by the page`,
+2. the value you type into **Capacity override (tokens)** — `Configured by you`,
+3. a deliberately conservative fallback — `Conservative fallback`.
+
+Only the third source is a constant, and it is always shown as such. Nothing in the pressure maths compares against a fixed model limit: the levels (`watch`, `compact`, `critical`) are fractions of whatever capacity was resolved, so a larger window moves the thresholds automatically.
+
+**The reading is an estimate and says so.** Used tokens are approximated from the visible conversation text, so the panel prints `~N% of <capacity> tokens (est. … over N turns, <source>)`. Treat it as a trend indicator, not a measurement; if you know your real window, set the override and the percentage becomes exact relative to that number.
+
+**Compact & continue** recovers a conversation that is close to its limit. Pressing it:
+
+1. enqueues one deterministic handoff prompt at the front of the queue and starts it,
+2. reads the reply back out of the page and validates it — it must contain the five required labels (`STATE`, `DECISIONS`, `OPEN QUESTIONS`, `NEXT STEPS`, `CONSTRAINTS`) with content and in order,
+3. stores the validated brief locally and **pauses** the source queue, so the follow-ups still queued are not spent on a conversation that is out of headroom,
+4. opens a fresh ChatGPT conversation, which imports the brief plus those queued follow-ups on load.
+
+Fail-closed throughout: an unrecognized or incomplete brief never becomes a handoff, and the source queue is only paused after a validated brief exists. If validation fails, nothing about your queue changes. The new chat is opened through the extension background script, which only ever opens the same origin it was called from, and only that created tab may claim the import.
+
+See `docs/superpowers/specs/2026-09-13-context-handoff-compaction-design.md` for the capacity-resolution rules and the handoff protocol.
+
 ## Tests
 
 Run unit/integration tests:
@@ -230,6 +258,8 @@ The production manifest requests:
 - Host access only to `https://chatgpt.com/*`.
 - Optional `nativeMessaging` — requested only when the user explicitly enables the FlowRun CLI bridge.
 
+The compact-and-continue handoff record (the validated brief plus the follow-up contents it carries) is stored in the same local `chrome.storage.local` area, bounded to one pending handoff, and the id of the new chat tab it opened is kept briefly in `chrome.storage.session` (10-minute expiry). No new permissions are required for either: opening a tab needs no permission, and `storage` already covers `storage.session`.
+
 The project does not read browser cookies or credentials, call the OpenAI API, send telemetry, or contact an external backend.
 
 ## Known limitations
@@ -238,6 +268,7 @@ The project does not read browser cookies or credentials, call the OpenAI API, s
 - The extension can observe only UI state exposed by the current ChatGPT page. It cannot prove server-side delivery after an ambiguous click, which is why unresolved sends are never retried automatically.
 - A queue is tied to the ChatGPT conversation identity derived from the current URL. Temporary new-chat state is migrated once a real `/c/<conversation-id>` URL appears.
 - Browser notifications depend on the browser/OS notification environment.
+- The context percentage is a character-based estimate, not token accounting; ChatGPT Web exposes no usage counter. The adapter interface check reports only what the current page structure proves, and it does not verify the model or plan.
 
 ## Project structure
 
@@ -247,6 +278,7 @@ The project does not read browser cookies or credentials, call the OpenAI API, s
 - `src/adapter/` — ChatGPT DOM boundary.
 - `src/runtime/` — extension RPC/client/runner and conversation identity.
 - `src/ui/` — Shadow DOM queue panel.
+- `src/context/` — runtime-resolved context capacity, the local pressure estimate, and the compaction handoff (brief prompt, validation, seed, bounded storage).
 - `src/flowrun/` — FlowRun schema, templates, receipts, assertions, deterministic engine, bounded run storage, and queue-backed browser runtime.
 - `src/cli/` — FlowRun CLI commands and local mailbox client.
 - `src/bridge/` — Native Messaging protocol, installer, mailbox, target registry, and unattended job handoff.

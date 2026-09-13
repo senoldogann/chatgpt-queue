@@ -2,6 +2,11 @@ declare const __FLOWRUN_E2E__: boolean;
 
 import { DOMChatGPTAdapter } from './adapter/dom-chatgpt-adapter';
 import { BridgeContentController, publishRecoveredBridgeRun } from './bridge/content-controller';
+import { readRuntimeDeclaredCapacity, resolveContextCapacity } from './context/capacity';
+import { HANDOFF_PROMPT, buildHandoffSeed, parseHandoffBrief } from './context/handoff';
+import { HandoffRepository, type HandoffRecord } from './context/handoff-repository';
+import { measureContextPressure, type ContextPressure } from './context/pressure';
+import { ContextSettingsRepository } from './context/settings';
 import type { ClaimResult } from './coordinator/queue-coordinator';
 import type { ConversationQueue } from './domain/types';
 import { FlowRunBrowserController } from './flowrun/browser-controller';
@@ -14,12 +19,18 @@ import { ChromeClient } from './runtime/chrome-client';
 import { conversationKeyFromUrl, shouldMigrateConversationKey } from './runtime/identity';
 import type { BridgeRunMessage } from './runtime/protocol';
 import { QueueRunner } from './runtime/queue-runner';
-import { QueuePanel } from './ui/queue-panel';
+import { chromeStorageArea } from './storage/queue-repository';
+import { QueuePanel, type QueuePanelContextView } from './ui/queue-panel';
 
 const TEMP_SESSION_KEY = 'chatgpt-queue:temporary-key';
+const HANDOFF_IMPORT_SESSION_KEY = 'chatgpt-queue:handoff-imported';
 const STABLE_WINDOW_MS = 900;
 const HEARTBEAT_MS = 10_000;
 const FLOWRUN_RECONCILE_MS = 500;
+/** The context estimate clones visible turns, so it refreshes on a budget rather than per render. */
+const CONTEXT_REFRESH_MS = 1_500;
+/** A tab that does not own the queue still refreshes local panel state, but not per DOM mutation. */
+const PASSIVE_RENDER_MIN_MS = 1_000;
 
 const getTemporaryKey = (): string => {
   const existing = sessionStorage.getItem(TEMP_SESSION_KEY);
@@ -45,6 +56,34 @@ let workflowError: string | undefined;
 let bridgeTargetId: string | undefined;
 let bridgeState: 'disabled' | 'enabling' | 'disconnected' | 'connected' = 'disconnected';
 let recoveringTransientBlock = false;
+let contextCapacityOverride: number | undefined;
+let handoffRecord: HandoffRecord | undefined;
+let handoffCaptureInFlight = false;
+let pressureCache: ContextPressure | undefined;
+let pressureCacheAt = 0;
+let lastPassiveRenderAt = 0;
+const attemptedHandoffItems = new Set<string>();
+
+const handoffRepository = new HandoffRepository(chromeStorageArea());
+const contextSettings = new ContextSettingsRepository(chromeStorageArea());
+
+const readImportedHandoffKey = (): string | undefined => {
+  try {
+    return sessionStorage.getItem(HANDOFF_IMPORT_SESSION_KEY) ?? undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+const writeImportedHandoffKey = (key: string): void => {
+  try {
+    sessionStorage.setItem(HANDOFF_IMPORT_SESSION_KEY, key);
+  } catch {
+    // Best-effort: the claim is single-use in the background, so a lost marker is not a data risk.
+  }
+};
+
+let importedHandoffKey: string | undefined = readImportedHandoffKey();
 
 const shouldObserveLifecycle = (queue: ConversationQueue | undefined): boolean => {
   if (!queue) return false;
@@ -63,6 +102,7 @@ let panel: QueuePanel;
 const render = async (): Promise<ConversationQueue | undefined> => {
   const queue = await client.get(currentKey);
   if (queue) {
+    await maybeCaptureHandoff(queue);
     const notice = queue.blockedReason === 'dom-unrecognized'
       ? `DOM diagnostics: ${adapter.getDiagnosticSummary()}`
       : localNotice;
@@ -71,6 +111,7 @@ const render = async (): Promise<ConversationQueue | undefined> => {
       ...(workflowRun === undefined ? {} : { run: workflowRun }),
       ...(workflowError === undefined ? {} : { error: workflowError }),
       bridgeState,
+      context: buildContextView(queue),
     });
   }
   return queue;
@@ -78,6 +119,156 @@ const render = async (): Promise<ConversationQueue | undefined> => {
 
 const ensureCurrent = async (): Promise<ConversationQueue> =>
   client.request({ type: 'ensure', key: currentKey });
+
+const currentContextPressure = (): ContextPressure => {
+  const now = Date.now();
+  if (pressureCache && now - pressureCacheAt < CONTEXT_REFRESH_MS) return pressureCache;
+  const capacity = resolveContextCapacity({
+    runtimeDeclaredTokens: readRuntimeDeclaredCapacity(document),
+    configuredTokens: contextCapacityOverride,
+  });
+  pressureCache = measureContextPressure(adapter.getConversationTurns(), capacity);
+  pressureCacheAt = now;
+  return pressureCache;
+};
+
+const buildContextView = (queue: ConversationQueue): QueuePanelContextView => {
+  const preparing = queue.items.some((item) => item.content === HANDOFF_PROMPT && item.state !== 'completed');
+  return {
+    pressure: currentContextPressure(),
+    adapter: { report: adapter.inspectInterface(), diagnostics: adapter.getDiagnosticSummary() },
+    ...(contextCapacityOverride === undefined ? {} : { capacityOverride: contextCapacityOverride }),
+    handoff: handoffRecord && handoffRecord.sourceConversationKey === currentKey
+      ? { status: 'ready', carriedItems: handoffRecord.carriedItems.length }
+      : preparing
+        ? { status: 'capturing', carriedItems: 0 }
+        : { status: 'none', carriedItems: 0 },
+  };
+};
+
+/**
+ * Turns a completed handoff prompt into a durable brief.
+ *
+ * Fail-closed: an unrecognized or incomplete brief never becomes a handoff, and the source queue is
+ * paused only after a validated brief exists. A failed compaction therefore leaves the queue exactly
+ * as it was instead of losing the remaining follow-ups.
+ */
+const maybeCaptureHandoff = async (queue: ConversationQueue): Promise<void> => {
+  if (!ownsCurrent || handoffCaptureInFlight || handoffRecord) return;
+  const completed = [...queue.items].reverse().find(
+    (item) => item.content === HANDOFF_PROMPT && typeof item.completedAt === 'number' && !attemptedHandoffItems.has(item.id),
+  );
+  if (!completed) return;
+  const artifact = adapter.getLatestCompletedAssistantArtifact();
+  if (!artifact) return;
+  attemptedHandoffItems.add(completed.id);
+  const parsed = parseHandoffBrief(artifact.text);
+  if (!parsed.ok) {
+    localNotice = `Handoff brief rejected: ${parsed.errors.join(', ')}`;
+    return;
+  }
+
+  handoffCaptureInFlight = true;
+  try {
+    const carriedItems = queue.items
+      .filter((item) => item.state === 'queued' && item.content !== HANDOFF_PROMPT)
+      .map((item) => item.content);
+    const result = await handoffRepository.capture({
+      itemId: completed.id,
+      sourceConversationKey: currentKey,
+      brief: parsed.brief,
+      carriedItems,
+      now: Date.now(),
+      idFactory: () => `handoff:${crypto.randomUUID()}`,
+    });
+    if (!result.ok) return;
+    handoffRecord = result.record;
+    // Keep the remaining follow-ups queued for the fresh conversation rather than spending them on
+    // a conversation that has run out of headroom.
+    if (ownsCurrent) await client.request({ type: 'pause', key: currentKey }).catch(() => undefined);
+  } finally {
+    handoffCaptureInFlight = false;
+  }
+};
+
+const prepareHandoff = async (): Promise<void> => {
+  const queue = await ensureCurrent();
+  const report = adapter.inspectInterface();
+  if (report.health !== 'ok') {
+    localNotice = `Handoff unavailable: adapter interface is ${report.health}.`;
+    await render();
+    return;
+  }
+  if (queue.status === 'running' || queue.items.some((item) => ['sending', 'running'].includes(item.state))) {
+    localNotice = 'Handoff unavailable while the queue is actively sending. Pause it first.';
+    await render();
+    return;
+  }
+  if (handoffRecord?.sourceConversationKey === currentKey) {
+    localNotice = 'A handoff brief is already ready. Continue in a new chat.';
+    await render();
+    return;
+  }
+
+  localNotice = undefined;
+  try {
+    const added = await client.request<ConversationQueue>({ type: 'add', key: currentKey, messages: [HANDOFF_PROMPT] });
+    const handoffItem = [...added.items].reverse().find((item) => item.content === HANDOFF_PROMPT);
+    if (handoffItem) {
+      // The brief is produced first, so the remaining follow-ups are still queued when it is
+      // captured and can be carried into the fresh conversation untouched.
+      await client.request({ type: 'reorder', key: currentKey, itemId: handoffItem.id, queuedIndex: 0 });
+    }
+  } catch (error) {
+    localNotice = `Could not prepare a handoff: ${error instanceof Error ? error.message : String(error)}`;
+    await render();
+    return;
+  }
+  await render();
+  await startOrResume();
+};
+
+const openHandoff = async (): Promise<void> => {
+  const pending = handoffRecord ?? await handoffRepository.getPending();
+  if (!pending) {
+    localNotice = 'No handoff brief is ready.';
+    await render();
+    return;
+  }
+  try {
+    const opened = await client.request<{ tabId: number }>({
+      type: 'handoffOpen',
+      url: new URL('/', location.origin).toString(),
+    });
+    localNotice = `Opened a new chat for the handoff (tab ${opened.tabId}); it imports the brief on load.`;
+  } catch (error) {
+    localNotice = `Unable to open a handoff chat: ${error instanceof Error ? error.message : String(error)}`;
+  }
+  await render();
+};
+
+const importHandoffIfClaimed = async (): Promise<void> => {
+  if (importedHandoffKey === currentKey) return;
+  const claim = await client.request<{ claimed: boolean }>({ type: 'handoffClaim' });
+  if (!claim.claimed) return;
+  const pending = await handoffRepository.getPending();
+  if (!pending || pending.sourceConversationKey === currentKey) return;
+
+  const seed = buildHandoffSeed(pending.brief, pending.carriedItems);
+  await client.request({ type: 'add', key: currentKey, messages: seed });
+  await handoffRepository.consume(pending.id, currentKey, Date.now());
+  importedHandoffKey = currentKey;
+  writeImportedHandoffKey(currentKey);
+  localNotice = `Handoff imported: ${seed.length} queued message${seed.length === 1 ? '' : 's'} from the previous conversation.`;
+  await render();
+};
+
+const setContextCapacity = async (tokens: number | null): Promise<void> => {
+  await contextSettings.setCapacityTokens(tokens);
+  contextCapacityOverride = tokens ?? undefined;
+  pressureCache = undefined;
+  await render();
+};
 
 const registerBridgeTarget = async (): Promise<void> => {
   const previousState = bridgeState;
@@ -365,6 +556,9 @@ panel = new QueuePanel(host, {
   loadWorkflowPreset,
   runWorkflow: runSelectedWorkflow,
   clearWorkflow: clearSelectedWorkflow,
+  prepareHandoff,
+  openHandoff,
+  setContextCapacity,
   enableBridge: async () => {
     bridgeState = 'enabling';
     await render();
@@ -394,7 +588,17 @@ function scheduleEvaluation(domStable: boolean): void {
   evaluationTail = evaluationTail
     .then(async () => {
       await syncIdentity();
-      if (!ownsCurrent) return;
+      if (!ownsCurrent) {
+        // Panel state that is purely local — the adapter interface report and the context estimate —
+        // must still follow the page on a tab that does not drive this conversation's queue. ChatGPT
+        // mutates its DOM constantly, so this is deliberately budgeted instead of running per change.
+        const now = Date.now();
+        if (now - lastPassiveRenderAt >= PASSIVE_RENDER_MIN_MS) {
+          lastPassiveRenderAt = now;
+          await render();
+        }
+        return;
+      }
       await runner.evaluate(currentKey, domStable);
       const queue = await render();
       if (shouldObserveLifecycle(queue) &&
@@ -443,7 +647,12 @@ window.setInterval(() => {
   })().catch(() => undefined);
 }, HEARTBEAT_MS);
 
-void attachExistingQueue().then(async () => {
+void (async () => {
+  contextCapacityOverride = await contextSettings.getCapacityTokens().catch(() => undefined);
+  handoffRecord = await handoffRepository.getPending().catch(() => undefined);
+  await importHandoffIfClaimed().catch(() => undefined);
+})().then(async () => {
+  await attachExistingQueue();
   const recoveredRun = await flowRunController.recoverInterrupted(currentKey);
   if (recoveredRun) {
     await publishRecoveredBridgeRun(recoveredRun, async (jobId, update) => {
