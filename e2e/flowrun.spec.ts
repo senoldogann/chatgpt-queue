@@ -148,7 +148,8 @@ test('walks the built-in usage guide with visible progress and switches the pane
   await expect(root.locator('[data-tab="queue"]')).toHaveText('Sıra');
   await expect(root.locator('[data-tab="workflow"]')).toHaveText('İş Akışı');
   await expect(root.locator('[data-tab="system"]')).toHaveText('Sistem');
-  await expect(root.locator('[data-role="active-duration"]')).toHaveText(/Aktif süre \d{2}:\d{2}:\d{2}/);
+  await expect(root.locator('[data-role="metric-active-time"]')).toContainText('Aktif süre');
+  await expect(root.locator('[data-role="active-duration"]')).toHaveText(/\d{2}:\d{2}:\d{2}/);
   await expect(card).toContainText('Takip mesajı ekleyin');
   await expect.poll(async () => extensionWorker.evaluate(async () => {
     const data = await chrome.storage.local.get('chatgptQueueUiPreferences');

@@ -147,7 +147,8 @@ test('shows the command-center tabs and formatted total active time', async ({ e
 
   await expect(root.locator('[role="tablist"]')).toBeVisible();
   await expect(root.locator('[data-tab="queue"]')).toHaveAttribute('aria-selected', 'true');
-  await expect(root.locator('[data-role="active-duration"]')).toHaveText(/Active time \d{2}:\d{2}:\d{2}/);
+  await expect(root.locator('[data-role="metric-active-time"]')).toContainText('Active time');
+  await expect(root.locator('[data-role="active-duration"]')).toHaveText(/\d{2}:\d{2}:\d{2}/);
 
   await root.locator('[data-tab="workflow"]').click();
   await expect(root.locator('[data-panel="workflow"]')).toBeVisible();
@@ -159,6 +160,38 @@ test('shows the command-center tabs and formatted total active time', async ({ e
 
   await root.locator('[data-tab="queue"]').click();
   await expect(root.locator('[data-panel="queue"]')).toBeVisible();
+});
+
+test('keeps a fixed-size app shell and moves completed work into collapsed History', async ({ extensionContext, extensionWorker }) => {
+  const page = await openFixture(extensionContext, '/c/fixed-shell-history?authenticated=1');
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const root = queueRoot(page);
+  const panel = root.locator('[data-role="app-shell"]');
+  await expect(panel).toBeVisible();
+
+  await expect.poll(async () => panel.evaluate((node) => {
+    const rect = node.getBoundingClientRect();
+    return [Math.round(rect.width), Math.round(rect.height)];
+  })).toEqual([420, 720]);
+
+  const header = root.locator('.header');
+  expect(await header.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
+  await expect(root.locator('[data-role="metric-active-time"]')).toBeVisible();
+  await expect(root.locator('[data-role="active-duration"]')).toHaveText(/\d{2}:\d{2}:\d{2}/);
+
+  await addMessage(page, 'archive this completed task');
+  await startQueue(page);
+  await expect.poll(async () => (await sentEvents(page, 'fixed-shell-history')).length).toBe(1);
+  await page.locator('#fixture-complete').click();
+  await expect.poll(async () => (await storedQueue(extensionWorker, 'conv:fixed-shell-history'))?.status).toBe('completed');
+
+  const history = root.locator('details[data-role="history"]');
+  await expect(history).toBeAttached();
+  await expect(history).not.toHaveAttribute('open', '');
+  await expect(root.locator('[data-role="active-queue"]')).not.toContainText('archive this completed task');
+  await history.locator('summary').click();
+  await expect(history.locator('.history-copy')).toContainText('archive this completed task');
+  expect(await history.locator('.history-item.completed .history-copy').evaluate((node) => getComputedStyle(node).textDecorationLine)).toContain('line-through');
 });
 
 test('sends through the authenticated composer when send appears only after input', async ({ extensionContext, extensionWorker }) => {

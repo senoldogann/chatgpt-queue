@@ -34,6 +34,9 @@ describe('panel localisation', () => {
     expect(translate('tr', 'tab.workflow')).toBe('İş Akışı');
     expect(translate('tr', 'tab.system')).toBe('Sistem');
     expect(translate('tr', 'timer.active')).toBe('Aktif süre');
+    expect(translate('tr', 'metric.pending')).toBe('Bekleyen');
+    expect(translate('tr', 'queue.upNext')).toBe('Sıradakiler');
+    expect(translate('tr', 'history.title')).toBe('Geçmiş');
   });
 
   it('leaves an unknown placeholder intact instead of dropping it', () => {
