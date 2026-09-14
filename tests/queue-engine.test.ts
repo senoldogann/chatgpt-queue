@@ -71,6 +71,27 @@ describe('queue engine', () => {
     expect(queue.status).toBe('completed');
   });
 
+  it('prunes the oldest terminal history item to admit a new follow-up at capacity', () => {
+    let queue = addItems(createQueue('conv:a', now), Array.from({ length: 50 }, (_, i) => `item-${i}`), now + 1);
+    const oldestId = queue.items[0]!.id;
+    queue = markItemCompleted(queue, oldestId, now + 2);
+
+    queue = addItems(queue, ['item-50'], now + 3);
+
+    expect(queue.items).toHaveLength(50);
+    expect(queue.items.some((item) => item.id === oldestId)).toBe(false);
+    expect(queue.items.at(-1)).toMatchObject({ content: 'item-50', state: 'queued' });
+    expect(queue.items.filter((item) => item.state === 'queued')).toHaveLength(50);
+  });
+
+  it('never prunes active items to make room for new follow-ups', () => {
+    let queue = addItems(createQueue('conv:a', now), Array.from({ length: 50 }, (_, i) => `item-${i}`), now + 1);
+    queue = markItemCompleted(queue, queue.items[0]!.id, now + 2);
+
+    expect(() => addItems(queue, ['item-50', 'item-51'], now + 3)).toThrow(/50/);
+    expect(queue.items).toHaveLength(50);
+  });
+
   it('rejects more than 50 items', () => {
     const queue = createQueue('conv:a', now);
     expect(() => addItems(queue, Array.from({ length: 51 }, (_, i) => String(i)), now + 1)).toThrow(/50/);

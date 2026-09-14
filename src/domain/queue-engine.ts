@@ -24,9 +24,21 @@ export function createQueue(conversationKey: string, now: number): ConversationQ
 
 export function addItems(queue: ConversationQueue, contents: string[], now: number): ConversationQueue {
   const normalized = contents.map((content) => content.trim()).filter(Boolean);
-  if (queue.items.length + normalized.length > MAX_QUEUE_ITEMS) {
-    throw new Error(`Queue cannot contain more than ${MAX_QUEUE_ITEMS} items`);
+  const activeCount = queue.items.filter((item) => !isTerminalQueueItemState(item.state)).length;
+  if (activeCount + normalized.length > MAX_QUEUE_ITEMS) {
+    throw new Error(`Queue cannot contain more than ${MAX_QUEUE_ITEMS} active items`);
   }
+
+  const overflow = Math.max(0, queue.items.length + normalized.length - MAX_QUEUE_ITEMS);
+  let terminalItemsToDrop = overflow;
+  const retained = queue.items.filter((item) => {
+    if (terminalItemsToDrop > 0 && isTerminalQueueItemState(item.state)) {
+      terminalItemsToDrop -= 1;
+      return false;
+    }
+    return true;
+  });
+
   const added: QueueItem[] = normalized.map((content) => ({
     id: id('item'),
     content,
@@ -34,7 +46,7 @@ export function addItems(queue: ConversationQueue, contents: string[], now: numb
     createdAt: now,
     updatedAt: now,
   }));
-  return withUpdated({ ...queue, status: queue.status === 'completed' ? 'idle' : queue.status }, [...queue.items, ...added], now);
+  return withUpdated({ ...queue, status: queue.status === 'completed' ? 'idle' : queue.status }, [...retained, ...added], now);
 }
 
 export function getNextQueuedItem(queue: ConversationQueue): QueueItem | undefined {
