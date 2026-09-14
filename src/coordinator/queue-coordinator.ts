@@ -153,7 +153,7 @@ export class QueueCoordinator {
     return this.exclusive(async () => {
       const queue = await this.requiredQueue(key);
       this.requireOwner(queue, tabId);
-      if (!getNextQueuedItem(queue) && !queue.items.some((item) => item.state === 'running')) return queue;
+      if (!getNextQueuedItem(queue) && !queue.items.some((item) => ['sending', 'running'].includes(item.state))) return queue;
       const active = queue.runtime.activeItemId
         ? queue.items.find((item) => item.id === queue.runtime.activeItemId)
         : undefined;
