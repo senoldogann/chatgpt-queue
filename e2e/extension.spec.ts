@@ -169,10 +169,10 @@ test('keeps a fixed-size app shell and moves completed work into collapsed Histo
   const panel = root.locator('[data-role="app-shell"]');
   await expect(panel).toBeVisible();
 
-  const panelBox = await panel.boundingBox();
-  expect(panelBox).not.toBeNull();
-  expect(Math.round(panelBox!.width)).toBe(420);
-  expect(Math.round(panelBox!.height)).toBe(720);
+  await expect.poll(async () => panel.evaluate((node) => {
+    const rect = node.getBoundingClientRect();
+    return [Math.round(rect.width), Math.round(rect.height)];
+  })).toEqual([420, 720]);
 
   const header = root.locator('.header');
   expect(await header.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
