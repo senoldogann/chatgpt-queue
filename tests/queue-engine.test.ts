@@ -55,6 +55,22 @@ describe('queue engine', () => {
     expect(queue.status).toBe('completed');
   });
 
+  it('treats failed items as terminal when the last queued item is removed', () => {
+    let queue = addItems(createQueue('conv:a', now), ['failed', 'pending'], now + 1);
+    const [failed, pending] = queue.items;
+    queue = {
+      ...queue,
+      items: [
+        { ...failed!, state: 'failed', completedAt: now + 2, updatedAt: now + 2 },
+        pending!,
+      ],
+    };
+
+    queue = deleteQueuedItem(queue, pending!.id, now + 3);
+
+    expect(queue.status).toBe('completed');
+  });
+
   it('rejects more than 50 items', () => {
     const queue = createQueue('conv:a', now);
     expect(() => addItems(queue, Array.from({ length: 51 }, (_, i) => String(i)), now + 1)).toThrow(/50/);

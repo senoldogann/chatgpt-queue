@@ -1,6 +1,6 @@
 import type { AdapterInterfaceReport } from '../adapter/chatgpt-adapter';
 import type { ContextPressure } from '../context/pressure';
-import type { ConversationQueue, QueueItem } from '../domain/types';
+import { isTerminalQueueItemState, type ConversationQueue, type QueueItem } from '../domain/types';
 import type { WorkflowRun } from '../flowrun/events';
 import { WORKFLOW_PRESETS, localizedPresetText } from '../flowrun/presets';
 import type { WorkflowDefinition } from '../flowrun/schema';
@@ -172,9 +172,8 @@ export class QueuePanel {
     const selectionStart = editableActive?.selectionStart ?? null;
     const selectionEnd = editableActive?.selectionEnd ?? null;
 
-    const terminalStates = new Set<QueueItem['state']>(['completed', 'failed', 'cancelled']);
-    const activeItems = queue.items.filter((item) => !terminalStates.has(item.state));
-    const historyItems = queue.items.filter((item) => terminalStates.has(item.state));
+    const activeItems = queue.items.filter((item) => !isTerminalQueueItemState(item.state));
+    const historyItems = queue.items.filter((item) => isTerminalQueueItemState(item.state));
     const queuedItems = activeItems.filter((item) => item.state === 'queued');
     const queuedPositions = new Map(queuedItems.map((item, index) => [item.id, index + 1]));
     const queuedItemIds = new Set(queuedItems.map((item) => item.id));
