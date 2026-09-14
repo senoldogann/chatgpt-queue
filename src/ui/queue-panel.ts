@@ -112,6 +112,7 @@ export class QueuePanel {
   private collapsed = readSessionFlag(PANEL_COLLAPSED_KEY);
   private readonly collapsedQueueItemIds = new Set<string>();
   private activeTab: PanelTab = 'queue';
+  private historyOpen = false;
   private activeDurationTimer: ReturnType<typeof setInterval> | undefined;
   private activeDurationQueue?: ConversationQueue;
   private activeDurationLocale: Locale = 'en';
@@ -140,6 +141,7 @@ export class QueuePanel {
     if (!sameConversation) {
       this.collapsedQueueItemIds.clear();
       this.activeTab = 'queue';
+      this.historyOpen = false;
     }
     const existingNewMessage = sameConversation
       ? this.root.querySelector<HTMLTextAreaElement>('[data-role="new-message"]')
@@ -170,7 +172,10 @@ export class QueuePanel {
     const selectionStart = editableActive?.selectionStart ?? null;
     const selectionEnd = editableActive?.selectionEnd ?? null;
 
-    const queuedItems = queue.items.filter((item) => item.state === 'queued');
+    const terminalStates = new Set<QueueItem['state']>(['completed', 'failed', 'cancelled']);
+    const activeItems = queue.items.filter((item) => !terminalStates.has(item.state));
+    const historyItems = queue.items.filter((item) => terminalStates.has(item.state));
+    const queuedItems = activeItems.filter((item) => item.state === 'queued');
     const queuedPositions = new Map(queuedItems.map((item, index) => [item.id, index + 1]));
     const queuedItemIds = new Set(queuedItems.map((item) => item.id));
     for (const itemId of this.collapsedQueueItemIds) {
@@ -189,7 +194,7 @@ export class QueuePanel {
           ? `<button class="primary" data-action="start">${escapeHtml(t('action.start'))}</button>`
           : '';
 
-    const rows = queue.items.map((item) => {
+    const activeRows = activeItems.map((item) => {
       if (item.state === 'queued') {
         const itemCollapsed = this.collapsedQueueItemIds.has(item.id);
         const position = queuedPositions.get(item.id) ?? 0;
@@ -222,6 +227,17 @@ export class QueuePanel {
         <span class="item-state">${escapeHtml(t(itemStateKey(item.state)))}</span>
       </li>`;
     }).join('');
+    const historyRows = historyItems.map((item) => `<li class="history-item ${item.state}">
+      <span class="mark">${stateMark(item)}</span>
+      <span class="history-copy">${escapeHtml(item.content)}</span>
+      <span class="item-state">${escapeHtml(t(itemStateKey(item.state)))}</span>
+    </li>`).join('');
+    const historySection = historyRows
+      ? `<details class="history-section" data-role="history"${this.historyOpen ? ' open' : ''}>
+          <summary><span>${escapeHtml(t('history.title'))}</span><span class="history-count">${historyItems.length}</span><span class="history-chevron" aria-hidden="true">⌄</span></summary>
+          <ul class="history-list">${historyRows}</ul>
+        </details>`
+      : '';
 
     // The raw code stays in the notice so a report or a log search still matches it; the human
     // sentence is added only when the code is known, so an unmapped code is never printed twice.
@@ -402,7 +418,8 @@ export class QueuePanel {
           right: 16px;
           bottom: 16px;
           z-index: 2147483647;
-          width: min(390px, calc(100vw - 32px));
+          width: min(420px, calc(100vw - 24px));
+          height: min(720px, calc(100vh - 24px));
           color: #f3f3f3;
           font: 13px/1.4 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
           pointer-events: none;
@@ -413,6 +430,10 @@ export class QueuePanel {
           border: 1px solid rgba(255,255,255,.14);
           border-radius: 16px;
           box-shadow: 0 18px 55px rgba(0,0,0,.38);
+          width: 100%;
+          height: 100%;
+          display: grid;
+          grid-template-rows: auto minmax(0, 1fr);
           overflow: hidden;
           transform: translateX(0);
           opacity: 1;
@@ -452,58 +473,68 @@ export class QueuePanel {
           pointer-events: auto;
         }
         .header {
-          display: flex;
-          flex-wrap: wrap;
-          align-items: center;
-          justify-content: space-between;
-          gap: 8px 10px;
-          padding: 11px 12px 10px;
+          display: grid;
+          gap: 10px;
+          padding: 12px;
           border-bottom: 1px solid var(--cq-border);
+          background: rgba(24,24,24,.88);
         }
-        .title-group { display: flex; align-items: center; gap: 9px; min-width: 0; flex: 1 1 auto; }
-        .title { font-weight: 700; letter-spacing: .01em; }
-        .count {
-          display: inline-flex;
+        .header-primary {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) auto;
           align-items: center;
-          justify-content: center;
-          min-width: 24px;
-          height: 22px;
-          padding: 0 7px;
-          border-radius: 999px;
-          background: rgba(255,255,255,.09);
-          color: #ddd;
-          font-size: 12px;
+          gap: 10px;
+          min-width: 0;
         }
-        .header-actions {
-          display: flex;
-          flex: 1 1 100%;
-          align-items: center;
-          justify-content: flex-end;
+        .title-group { display: flex; align-items: center; gap: 8px; min-width: 0; }
+        .title { font-weight: 720; font-size: 15px; letter-spacing: -.01em; }
+        .header-controls { display: flex; align-items: center; justify-content: flex-end; gap: 6px; min-width: 0; }
+        .header-metrics {
+          display: grid;
+          grid-template-columns: minmax(0, 1.05fr) minmax(0, 1.2fr) minmax(70px, .72fr);
           gap: 6px;
           min-width: 0;
         }
-        .active-duration {
-          display: inline-flex;
-          align-items: center;
-          min-height: 26px;
-          padding: 3px 8px;
-          border-radius: 999px;
+        .metric {
+          display: grid;
+          align-content: center;
+          gap: 2px;
+          min-width: 0;
+          min-height: 44px;
+          padding: 6px 9px;
+          border: 1px solid rgba(255,255,255,.075);
+          border-radius: 10px;
           background: var(--cq-surface-raised);
-          color: #d8d8d8;
-          font: 600 10.5px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+        }
+        .metric-label {
+          color: #7f7f7f;
+          font-size: 9px;
+          font-weight: 650;
+          letter-spacing: .055em;
+          line-height: 1.15;
+          text-transform: uppercase;
           white-space: nowrap;
         }
+        .metric-value { min-width: 0; color: #d7d7d7; font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+        .active-duration {
+          font: 650 12px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+          font-variant-numeric: tabular-nums;
+          letter-spacing: -.02em;
+        }
+        .pending-value { font-size: 13px; }
         .status {
           display: inline-flex;
           align-items: center;
           gap: 6px;
-          color: #c8c8c8;
-          font-size: 12px;
+          min-width: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
         }
         .status::before {
           content: '';
           width: 7px;
           height: 7px;
+          flex: 0 0 7px;
           border-radius: 999px;
           background: #8d8d8d;
           box-shadow: 0 0 0 3px rgba(255,255,255,.04);
@@ -524,10 +555,15 @@ export class QueuePanel {
         @media (prefers-reduced-motion: reduce) { .activity-spinner { animation: none; } }
         .status-blocked::before { background: #ff8b8b; }
         .status-completed::before { background: #9fd3a9; }
-        .body { padding: 10px 12px 12px; max-height: min(65vh, 640px); overflow: auto; }
+        .body {
+          min-height: 0;
+          display: flex;
+          flex-direction: column;
+          padding: 10px 12px 12px;
+          overflow: hidden;
+        }
         .tab-bar {
-          position: sticky;
-          top: -10px;
+          position: relative;
           z-index: 4;
           display: grid;
           grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -554,9 +590,10 @@ export class QueuePanel {
           color: #fff;
           box-shadow: 0 1px 0 rgba(255,255,255,.04) inset;
         }
+        .tab-content { flex: 1; min-height: 0; }
         .tab-panel[hidden] { display: none !important; }
-        .tab-panel { min-width: 0; }
-        .queue-panel { display: grid; gap: 10px; }
+        .tab-panel { min-width: 0; height: 100%; overflow: auto; padding: 1px 2px 2px; }
+        .queue-panel { display: grid; align-content: start; gap: 12px; }
         .queue-panel .toolbar { margin-bottom: 0; }
 
         .toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
@@ -612,12 +649,15 @@ export class QueuePanel {
         }
         .composer {
           display: grid;
-          grid-template-columns: 1fr auto;
           gap: 8px;
-          align-items: stretch;
-          margin-bottom: 12px;
+          padding: 10px;
+          border: 1px solid rgba(255,255,255,.075);
+          border-radius: 12px;
+          background: rgba(255,255,255,.025);
         }
-        .composer button { height: 100%; min-width: 58px; }
+        .composer textarea { min-height: 76px; resize: vertical; }
+        .composer-actions { display: flex; justify-content: flex-end; gap: 8px; }
+        .composer-actions button { min-width: 68px; }
         ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
         .item {
           border: 1px solid rgba(255,255,255,.08);
@@ -659,6 +699,57 @@ export class QueuePanel {
         .mark { color: #aaa; }
         .running .mark, .sending .mark { color: #fff; }
         .completed { opacity: .68; }
+        .queue-section { display: grid; gap: 8px; }
+        .section-heading { display: flex; align-items: center; gap: 8px; min-height: 28px; }
+        .section-heading strong { font-size: 11.5px; color: #cfcfcf; }
+        .section-count, .history-count {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          min-width: 22px;
+          height: 20px;
+          padding: 0 6px;
+          border-radius: 999px;
+          background: rgba(255,255,255,.065);
+          color: #9b9b9b;
+          font-size: 10px;
+        }
+        .history-section {
+          border-top: 1px solid rgba(255,255,255,.07);
+          padding-top: 4px;
+        }
+        .history-section summary {
+          display: grid;
+          grid-template-columns: auto auto 1fr;
+          align-items: center;
+          gap: 7px;
+          min-height: 36px;
+          padding: 5px 2px;
+          color: #9f9f9f;
+          cursor: pointer;
+          list-style: none;
+          user-select: none;
+        }
+        .history-section summary::-webkit-details-marker { display: none; }
+        .history-chevron { justify-self: end; transition: transform .14s ease; }
+        .history-section[open] .history-chevron { transform: rotate(180deg); }
+        .history-list { margin-top: 4px; }
+        .history-item {
+          display: grid;
+          grid-template-columns: 18px minmax(0, 1fr) auto;
+          align-items: center;
+          gap: 8px;
+          min-height: 42px;
+          padding: 8px 9px;
+          border: 1px solid rgba(255,255,255,.055);
+          border-radius: 10px;
+          background: rgba(255,255,255,.02);
+          color: #969696;
+        }
+        .history-copy { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .history-item.completed .history-copy { text-decoration: line-through; text-decoration-thickness: 1px; opacity: .68; }
+        .history-item.failed .history-copy { color: #c99595; }
+        .history-item.cancelled .history-copy { opacity: .6; }
         .notice {
           margin: 0 0 10px;
           padding: 9px 10px;
@@ -867,10 +958,8 @@ export class QueuePanel {
         .dock.stale .capacity-row { display: none; }
 
         @media (max-width: 520px) {
-          .dock { right: 8px; bottom: 8px; width: calc(100vw - 16px); }
-          .header { align-items: flex-start; }
-          .header-actions { flex-wrap: wrap; justify-content: flex-start; }
-          .body { max-height: 58vh; }
+          .dock { right: 8px; bottom: 8px; width: calc(100vw - 16px); height: min(720px, calc(100vh - 16px)); }
+          .header-metrics { grid-template-columns: minmax(0, 1fr) minmax(0, 1.12fr) 64px; }
           .compact { grid-template-columns: 18px minmax(0,1fr); }
           .compact .item-state { grid-column: 2; }
           .item-head { flex-wrap: wrap; }
@@ -878,18 +967,29 @@ export class QueuePanel {
         }
       </style>
       <div class="dock${this.collapsed ? ' collapsed' : ''}${stale ? ' stale' : ''}">
-        <section class="panel" aria-label="${escapeHtml(t('app.title'))}">
+        <section class="panel" data-role="app-shell" aria-label="${escapeHtml(t('app.title'))}">
           <header class="header">
-            <div class="title-group">
-              <span class="title">${escapeHtml(t('app.title'))}</span>
-              <span class="count">${pending}</span>
+            <div class="header-primary" data-role="header-primary">
+              <div class="title-group"><span class="title">${escapeHtml(t('app.title'))}</span></div>
+              <div class="header-controls">
+                <button class="ghost icon" data-action="open-guide" aria-label="${escapeHtml(t('guide.open'))}" title="${escapeHtml(t('guide.open'))}">?</button>
+                <select class="locale-select" data-role="locale" aria-label="${escapeHtml(t('locale.label'))}" title="${escapeHtml(t('locale.label'))}">${localeOptions}</select>
+                <button class="ghost icon" data-action="hide" aria-label="${escapeHtml(t('app.hide'))}" title="${escapeHtml(t('app.hide'))}">→</button>
+              </div>
             </div>
-            <div class="header-actions">
-              <span class="active-duration" data-role="active-duration">${escapeHtml(t('timer.active'))} ${escapeHtml(formatActiveDuration(totalActiveDurationMs(queue)))}</span>
-              <span class="status status-${stale ? 'stale' : escapeHtml(queue.status)}${isActive && !stale ? ' activity' : ''}">${isActive && !stale ? `<span class="activity-spinner" data-role="activity-spinner" aria-label="${escapeHtml(t('status.running'))}"></span>` : ''}${escapeHtml(stale ? t('status.stale') : t(`status.${queue.status}` as MessageKey))}</span>
-              <button class="ghost icon" data-action="open-guide" aria-label="${escapeHtml(t('guide.open'))}" title="${escapeHtml(t('guide.open'))}">?</button>
-              <select class="locale-select" data-role="locale" aria-label="${escapeHtml(t('locale.label'))}" title="${escapeHtml(t('locale.label'))}">${localeOptions}</select>
-              <button class="ghost icon" data-action="hide" aria-label="${escapeHtml(t('app.hide'))}" title="${escapeHtml(t('app.hide'))}">→</button>
+            <div class="header-metrics" data-role="header-metrics">
+              <div class="metric" data-role="metric-status">
+                <span class="metric-label">${escapeHtml(t('metric.status'))}</span>
+                <span class="metric-value status status-${stale ? 'stale' : escapeHtml(queue.status)}${isActive && !stale ? ' activity' : ''}">${isActive && !stale ? `<span class="activity-spinner" data-role="activity-spinner" aria-label="${escapeHtml(t('status.running'))}"></span>` : ''}${escapeHtml(stale ? t('status.stale') : t(`status.${queue.status}` as MessageKey))}</span>
+              </div>
+              <div class="metric" data-role="metric-active-time">
+                <span class="metric-label">${escapeHtml(t('timer.active'))}</span>
+                <span class="metric-value active-duration" data-role="active-duration">${escapeHtml(formatActiveDuration(totalActiveDurationMs(queue)))}</span>
+              </div>
+              <div class="metric" data-role="metric-pending">
+                <span class="metric-label">${escapeHtml(t('metric.pending'))}</span>
+                <span class="metric-value pending-value">${pending}</span>
+              </div>
             </div>
           </header>
           <div class="body">
@@ -901,23 +1001,28 @@ export class QueuePanel {
               <button class="tab${this.activeTab === 'workflow' ? ' active' : ''}" role="tab" data-tab="workflow" aria-selected="${String(this.activeTab === 'workflow')}" aria-controls="workflow-panel">${escapeHtml(t('tab.workflow'))}</button>
               <button class="tab${this.activeTab === 'system' ? ' active' : ''}" role="tab" data-tab="system" aria-selected="${String(this.activeTab === 'system')}" aria-controls="system-panel">${escapeHtml(t('tab.system'))}</button>
             </nav>
-            <section id="queue-panel" class="tab-panel queue-panel" role="tabpanel" data-panel="queue"${this.activeTab === 'queue' ? '' : ' hidden'}>
-              <div class="toolbar">${control}<span class="spacer"></span>${collapseAllControl}</div>
-              ${blocked}
-              ${localNotice}
-              <div class="composer">
-                <textarea data-role="new-message" placeholder="${escapeHtml(t('item.newMessagePlaceholder'))}" aria-label="${escapeHtml(t('item.newMessageLabel'))}"></textarea>
-                <button data-action="add">${escapeHtml(t('action.add'))}</button>
-              </div>
-              ${rows ? `<ul>${rows}</ul>` : `<div class="empty">${escapeHtml(t('list.empty'))}</div>`}
-            </section>
-            <section id="workflow-panel" class="tab-panel" role="tabpanel" data-panel="workflow"${this.activeTab === 'workflow' ? '' : ' hidden'}>
-              ${workflowSection}
-            </section>
-            <section id="system-panel" class="tab-panel" role="tabpanel" data-panel="system"${this.activeTab === 'system' ? '' : ' hidden'}>
-              ${contextSection}
-              ${bridgeControl}
-            </section>
+            <div class="tab-content">
+              <section id="queue-panel" class="tab-panel queue-panel" role="tabpanel" data-panel="queue"${this.activeTab === 'queue' ? '' : ' hidden'}>
+                ${blocked}
+                ${localNotice}
+                <div class="composer">
+                  <textarea data-role="new-message" placeholder="${escapeHtml(t('item.newMessagePlaceholder'))}" aria-label="${escapeHtml(t('item.newMessageLabel'))}"></textarea>
+                  <div class="composer-actions"><button data-action="add">${escapeHtml(t('action.add'))}</button></div>
+                </div>
+                <section class="queue-section" data-role="active-queue">
+                  <div class="section-heading"><strong>${escapeHtml(t('queue.upNext'))}</strong><span class="section-count">${activeItems.length}</span><span class="spacer"></span>${control}${collapseAllControl}</div>
+                  ${activeRows ? `<ul>${activeRows}</ul>` : `<div class="empty">${escapeHtml(t('list.empty'))}</div>`}
+                </section>
+                ${historySection}
+              </section>
+              <section id="workflow-panel" class="tab-panel" role="tabpanel" data-panel="workflow"${this.activeTab === 'workflow' ? '' : ' hidden'}>
+                ${workflowSection}
+              </section>
+              <section id="system-panel" class="tab-panel" role="tabpanel" data-panel="system"${this.activeTab === 'system' ? '' : ' hidden'}>
+                ${contextSection}
+                ${bridgeControl}
+              </section>
+            </div>
           </div>
         </section>
         <button class="peek" data-action="show" aria-label="${escapeHtml(t('app.show'))}">${isActive ? '<span class="activity-spinner" data-role="activity-spinner-collapsed" aria-hidden="true"></span>' : ''}<span>‹</span><strong>${escapeHtml(t('app.collapsedLabel', { count: pending }))}</strong></button>
@@ -1046,7 +1151,7 @@ export class QueuePanel {
     const queue = this.activeDurationQueue;
     const node = this.root.querySelector<HTMLElement>('[data-role="active-duration"]');
     if (!queue || !node) return;
-    node.textContent = `${translate(this.activeDurationLocale, 'timer.active')} ${formatActiveDuration(totalActiveDurationMs(queue))}`;
+    node.textContent = formatActiveDuration(totalActiveDurationMs(queue));
   }
 
   private setQueueItemCollapsed(itemId: string, collapsed: boolean): void {
@@ -1204,6 +1309,9 @@ export class QueuePanel {
       invoke(() => this.actions.setContextCapacity!(next));
     });
 
+    this.root.querySelector<HTMLDetailsElement>('details[data-role="history"]')?.addEventListener('toggle', (event) => {
+      this.historyOpen = (event.currentTarget as HTMLDetailsElement).open;
+    });
     this.root.querySelector('[data-action="toggle-all-items"]')?.addEventListener('click', () => this.toggleAllQueuedItems());
     this.root.querySelector('[data-action="clear-workflow"]')?.addEventListener('click', () => invoke(this.actions.clearWorkflow));
     this.root.querySelector('[data-action="enable-bridge"]')?.addEventListener('click', () => invoke(this.actions.enableBridge));

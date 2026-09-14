@@ -18,11 +18,11 @@ The extension advances the queue by observing the real ChatGPT page state. It do
 - Different conversations can run independently in different tabs.
 - Temporary new-chat queue keys migrate to the real conversation ID after ChatGPT assigns one.
 - Local completion/blocked notifications.
-- CSS-only running activity indicator in both expanded and collapsed Queue UI, plus a real-time **Active time** counter derived from queue item start/completion timestamps.
+- Fixed-size Queue app shell (420 × 720 px by default, viewport-bounded on smaller screens) with internal tab scrolling, a two-row header, and a real-time **Active time** metric derived from queue item start/completion timestamps.
 - Non-mutating adapter interface health, with on-demand diagnostics, so ChatGPT DOM drift is visible before it blocks a queue.
 - A local context-pressure estimate driven by a runtime-resolved capacity instead of a hardcoded model limit.
 - **Compact & continue**: ask the current conversation for a validated handoff brief, then open a fresh chat seeded with that brief and the follow-ups you had queued.
-- **English and Turkish panel UI**, switchable at any time from the panel header (`Auto`, `EN`, `TR`); `Auto` follows the browser language. The panel is split into **Queue / Workflow / System** tabs to keep dense controls understandable.
+- **English and Turkish panel UI**, switchable at any time from the panel header (`Auto`, `EN`, `TR`); `Auto` follows the browser language. The panel is split into **Queue / Workflow / System** tabs. The Queue tab keeps active/pending work under **Up next** while completed, failed, and cancelled items move into a collapsed-by-default **History** section; completed history text is struck through.
 - **Built-in usage guide**: a step-by-step walkthrough that highlights the real control each step describes, with visible progress, directly in the panel.
 
 ## Requirements
@@ -223,7 +223,7 @@ New to the panel? Press the **?** button in the panel header. The usage guide wa
 
 1. Open a ChatGPT conversation.
 2. Add one or more follow-up messages in the Queue panel.
-3. Reorder or edit queued items if needed. Use the Queue tab’s **Collapse** control to collapse every queued follow-up at once; when all are collapsed it becomes **Expand**. Each collapsed row keeps **Expand** and a delete icon beside it, and unsaved drafts stay mounted while collapsed.
+3. Reorder or edit queued items if needed. Use the Queue tab’s **Collapse** control to collapse every queued follow-up at once; when all are collapsed it becomes **Expand**. Each collapsed row keeps **Expand** and a delete icon beside it, and unsaved drafts stay mounted while collapsed. Finished items leave **Up next** and appear under the collapsed **History** section instead of stretching the active queue.
 4. Press **Start**.
 5. The extension reserves exactly one item in local storage before placing it in the ChatGPT composer and clicking Send.
 6. The next item is not sent until generation has been observed, an assistant response has appeared, the composer/send state is ready again, and the DOM has reached a short quiescent period.

@@ -24,6 +24,10 @@ const en = {
   'tab.workflow': 'Workflow',
   'tab.system': 'System',
   'timer.active': 'Active time',
+  'metric.status': 'Status',
+  'metric.pending': 'Pending',
+  'queue.upNext': 'Up next',
+  'history.title': 'History',
 
   'status.idle': 'Idle',
   'status.running': 'Running',
@@ -220,6 +224,10 @@ const tr: Record<MessageKey, string> = {
   'tab.workflow': 'İş Akışı',
   'tab.system': 'Sistem',
   'timer.active': 'Aktif süre',
+  'metric.status': 'Durum',
+  'metric.pending': 'Bekleyen',
+  'queue.upNext': 'Sıradakiler',
+  'history.title': 'Geçmiş',
 
   'status.idle': 'Boşta',
   'status.running': 'Çalışıyor',

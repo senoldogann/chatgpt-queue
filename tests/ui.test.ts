@@ -123,6 +123,48 @@ describe('QueuePanel', () => {
     queueTab.click();
     expect(root.querySelector<HTMLTextAreaElement>('[data-role="new-message"]')!.value).toBe('keep this draft');
   });
+  it('renders a fixed app shell with a two-row header and terminal items in collapsed History', () => {
+    const host = document.createElement('div');
+    document.body.append(host);
+    const panel = new QueuePanel(host, {});
+    const queue: ConversationQueue = {
+      ...sampleQueue(),
+      items: [
+        { id: 'done', content: 'Finished task', state: 'completed', createdAt: 1, updatedAt: 8, completedAt: 8 },
+        { id: 'failed', content: 'Failed task', state: 'failed', createdAt: 1, updatedAt: 7, completedAt: 7 },
+        { id: 'active', content: 'Current task', state: 'running', createdAt: 1, updatedAt: 6, startedAt: 4, dispatchToken: 'd' },
+        { id: 'wait', content: 'Next task', state: 'queued', createdAt: 1, updatedAt: 5 },
+      ],
+      runtime: { phase: 'generating', activeItemId: 'active', baselineAssistantCount: 1, generationObserved: true },
+    };
+
+    panel.render(queue);
+    const root = host.shadowRoot!;
+    const shell = root.querySelector<HTMLElement>('[data-role="app-shell"]')!;
+    const primaryHeader = root.querySelector<HTMLElement>('[data-role="header-primary"]')!;
+    const metrics = root.querySelector<HTMLElement>('[data-role="header-metrics"]')!;
+    expect(shell).not.toBeNull();
+    expect(primaryHeader).not.toBeNull();
+    expect(metrics).not.toBeNull();
+    expect(metrics.querySelector('[data-role="metric-status"]')).not.toBeNull();
+    expect(metrics.querySelector('[data-role="metric-active-time"]')).not.toBeNull();
+    expect(metrics.querySelector('[data-role="metric-pending"]')).not.toBeNull();
+
+    const activeList = root.querySelector<HTMLElement>('[data-role="active-queue"]')!;
+    expect(activeList.textContent).toContain('Current task');
+    expect(activeList.textContent).toContain('Next task');
+    expect(activeList.textContent).not.toContain('Finished task');
+    expect(activeList.textContent).not.toContain('Failed task');
+
+    const history = root.querySelector<HTMLDetailsElement>('details[data-role="history"]')!;
+    expect(history).not.toBeNull();
+    expect(history.open).toBe(false);
+    expect(history.textContent).toContain('History');
+    expect(history.textContent).toContain('Finished task');
+    expect(history.textContent).toContain('Failed task');
+    expect(history.querySelector('.history-item.completed .history-copy')).not.toBeNull();
+  });
+
   it('renders status, pending count, active and completed items', () => {
     const host = document.createElement('div');
     document.body.append(host);
