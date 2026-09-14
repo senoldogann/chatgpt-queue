@@ -59,7 +59,7 @@ const handoffTargets = {
   get: async (): Promise<HandoffTarget | undefined> => {
     const stored = await chrome.storage.session.get(HANDOFF_TARGET_KEY);
     const target = stored[HANDOFF_TARGET_KEY] as HandoffTarget | undefined;
-    if (!target || typeof target.tabId !== 'number' || typeof target.createdAt !== 'number') return undefined;
+    if (!target || typeof target.tabId !== 'number' || typeof target.handoffId !== 'string' || typeof target.createdAt !== 'number') return undefined;
     return target;
   },
   set: async (target: HandoffTarget): Promise<void> => {

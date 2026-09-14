@@ -216,6 +216,51 @@ test('compacts a near-limit conversation into a fresh chat and carries the queue
   expect(await sentEvents(newPage, 'temporary')).toHaveLength(0);
 });
 
+test('does not import a replacement handoff into a tab claimed for an earlier handoff', async ({ extensionContext, extensionWorker }) => {
+  const page = await openFixture(extensionContext, '/c/handoff-race-target');
+  const tabId = await extensionWorker.evaluate(async (url) => {
+    const tabs = await chrome.tabs.query({});
+    const tab = tabs.find((candidate) => candidate.url === url);
+    if (tab?.id === undefined) throw new Error('handoff-race-tab-not-found');
+    return tab.id;
+  }, page.url());
+  const now = Date.now();
+
+  await extensionWorker.evaluate(async ({ tabId, now, brief }) => {
+    await chrome.storage.session.set({
+      chatgptQueueHandoffTarget: { tabId, handoffId: 'handoff:a', createdAt: now },
+    });
+    await chrome.storage.local.set({
+      chatgptQueueHandoff: {
+        version: 1,
+        pending: {
+          version: 1,
+          id: 'handoff:b',
+          sourceConversationKey: 'conv:replacement-source',
+          brief,
+          carriedItems: ['replacement follow-up'],
+          createdAt: now + 1,
+        },
+        consumed: [],
+        processedItems: ['replacement-item'],
+      },
+    });
+  }, { tabId, now, brief: handoffBrief });
+
+  await page.reload();
+  await expect(queueRoot(page)).toBeAttached();
+  await page.waitForTimeout(500);
+
+  const queue = await storedQueue(extensionWorker, 'conv:handoff-race-target');
+  expect(queue?.items ?? []).toEqual([]);
+  const handoffState = await extensionWorker.evaluate(async () => {
+    const stored = await chrome.storage.local.get('chatgptQueueHandoff');
+    return stored.chatgptQueueHandoff as { pending?: { id?: string }; consumed?: unknown[] } | undefined;
+  });
+  expect(handoffState?.pending?.id).toBe('handoff:b');
+  expect(handoffState?.consumed).toEqual([]);
+});
+
 test('loads a built-in workflow with clear required/optional input guidance in English and Turkish', async ({ extensionContext }) => {
   const page = await openFixture(extensionContext, '/c/preset-load');
   const root = queueRoot(page);
