@@ -1,10 +1,10 @@
-import { MAX_QUEUE_ITEMS, STORAGE_VERSION } from './types';
+import { isTerminalQueueItemState, MAX_QUEUE_ITEMS, STORAGE_VERSION } from './types';
 import type { ConversationQueue, QueueItem } from './types';
 
 const id = (prefix: string) => `${prefix}:${crypto.randomUUID()}`;
 
 const withUpdated = (queue: ConversationQueue, items: QueueItem[], now: number): ConversationQueue => {
-  const hasPending = items.some((item) => item.state !== 'completed' && item.state !== 'cancelled');
+  const hasPending = items.some((item) => !isTerminalQueueItemState(item.state));
   const status = hasPending ? (queue.status === 'completed' ? 'idle' : queue.status) : 'completed';
   return { ...queue, items, status, updatedAt: now };
 };

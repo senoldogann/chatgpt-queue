@@ -3,6 +3,9 @@ export const MAX_QUEUE_ITEMS = 50;
 
 export type QueueStatus = 'idle' | 'running' | 'paused' | 'blocked' | 'completed';
 export type QueueItemState = 'queued' | 'sending' | 'running' | 'completed' | 'failed' | 'cancelled';
+export const isTerminalQueueItemState = (state: QueueItemState): boolean =>
+  state === 'completed' || state === 'failed' || state === 'cancelled';
+
 export type RuntimePhase =
   | 'idle'
   | 'ready_to_send'

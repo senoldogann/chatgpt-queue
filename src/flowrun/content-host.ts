@@ -1,5 +1,5 @@
 import type { AssistantArtifact } from '../adapter/chatgpt-adapter';
-import type { ConversationQueue } from '../domain/types';
+import { isTerminalQueueItemState, type ConversationQueue } from '../domain/types';
 import type { BrowserChatProviderHost } from './browser-chat-provider';
 
 export interface QueueBackedFlowRunHostDependencies {
@@ -41,7 +41,7 @@ export class QueueBackedFlowRunHost implements BrowserChatProviderHost {
 
       const item = queue.items.find((candidate) => candidate.id === itemId);
       if (!item) throw new Error('flowrun-queue-item-missing');
-      if (['completed', 'failed', 'cancelled'].includes(item.state)) return queue;
+      if (isTerminalQueueItemState(item.state)) return queue;
 
       await this.dependencies.waitForSignal();
     }
