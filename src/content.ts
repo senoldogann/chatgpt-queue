@@ -18,7 +18,7 @@ import { chromeFlowRunStorageArea, FlowRunRunRepository } from './flowrun/run-re
 import { validateWorkflowDocument, type WorkflowDefinition } from './flowrun/schema';
 import { ChromeClient } from './runtime/chrome-client';
 import { conversationKeyFromUrl, shouldMigrateConversationKey } from './runtime/identity';
-import type { BridgeRunMessage } from './runtime/protocol';
+import type { BridgeRunMessage, HandoffClaimResult } from './runtime/protocol';
 import { QueueRunner } from './runtime/queue-runner';
 import { chromeStorageArea } from './storage/queue-repository';
 import { createTranslator, resolveLocale, type Locale, type LocalePreference, type Translator } from './ui/i18n';
@@ -338,6 +338,7 @@ const openHandoff = async (): Promise<void> => {
     const opened = await client.request<{ tabId: number }>({
       type: 'handoffOpen',
       url: new URL('/', location.origin).toString(),
+      handoffId: pending.id,
     });
     localNotice = t('notice.handoffOpened', { tabId: opened.tabId });
   } catch (error) {
@@ -348,9 +349,9 @@ const openHandoff = async (): Promise<void> => {
 
 const importHandoffIfClaimed = async (): Promise<void> => {
   if (importedHandoffKey === currentKey) return;
-  const claim = await client.request<{ claimed: boolean }>({ type: 'handoffClaim' });
+  const claim = await client.request<HandoffClaimResult>({ type: 'handoffClaim' });
   if (!claim.claimed) return;
-  const pending = await handoffRepository.getPending();
+  const pending = await handoffRepository.getPending(claim.handoffId);
   if (!pending || pending.sourceConversationKey === currentKey) return;
 
   const seed = buildHandoffSeed(pending.brief, pending.carriedItems);

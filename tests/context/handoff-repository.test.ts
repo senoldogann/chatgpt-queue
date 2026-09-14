@@ -61,6 +61,16 @@ describe('HandoffRepository', () => {
     expect((await repo.getPending())?.id).toBe('handoff:item-2');
   });
 
+  it('does not expose a replacement handoff to a claim bound to the previous handoff id', async () => {
+    const repo = new HandoffRepository(new MemoryStorage());
+    await capture(repo, 'item-a', 10);
+    const claimedHandoffId = (await repo.getPending())!.id;
+    await capture(repo, 'item-b', 11);
+    expect(await repo.getPending(claimedHandoffId)).toBeUndefined();
+    expect(await repo.consume(claimedHandoffId, 'temp:a', 12)).toBeUndefined();
+    expect((await repo.getPending())?.id).toBe('handoff:item-b');
+  });
+
   it('bounds the processed-item memory and rejects empty briefs', async () => {
     const storage = new MemoryStorage();
     const repo = new HandoffRepository(storage);

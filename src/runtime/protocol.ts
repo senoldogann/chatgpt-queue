@@ -39,9 +39,13 @@ export type BridgeControlRequest =
 
 export type HandoffControlRequest =
   /** Opens a new-chat tab for a prepared handoff brief and remembers it as the import target. */
-  | { type: 'handoffOpen'; url: string }
+  | { type: 'handoffOpen'; url: string; handoffId: string }
   /** Returns `claimed: true` only for the tab the extension opened for the current handoff. */
   | { type: 'handoffClaim' };
+
+export type HandoffClaimResult =
+  | { claimed: false }
+  | { claimed: true; handoffId: string };
 
 export interface BridgeRunMessage {
   type: 'bridgeRun';

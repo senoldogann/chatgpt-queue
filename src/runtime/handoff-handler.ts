@@ -4,6 +4,7 @@ export const HANDOFF_TARGET_TTL_MS = 10 * 60_000;
 
 export interface HandoffTarget {
   tabId: number;
+  handoffId: string;
   createdAt: number;
 }
 
@@ -43,7 +44,7 @@ export async function handleHandoffRequest(
 
       const tab = await dependencies.createTab(target.toString());
       if (tab.id === undefined) throw new Error('handoff-tab-create-failed');
-      await dependencies.targets.set({ tabId: tab.id, createdAt: dependencies.now() });
+      await dependencies.targets.set({ tabId: tab.id, handoffId: request.handoffId, createdAt: dependencies.now() });
       return { tabId: tab.id };
     }
     case 'handoffClaim': {
@@ -54,7 +55,7 @@ export async function handleHandoffRequest(
         return { claimed: false };
       }
       await dependencies.targets.clear();
-      return { claimed: true };
+      return { claimed: true, handoffId: target.handoffId };
     }
   }
 }

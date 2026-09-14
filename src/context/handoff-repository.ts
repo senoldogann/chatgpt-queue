@@ -89,9 +89,10 @@ export class HandoffRepository {
     await this.storage.set({ [HANDOFF_STORAGE_KEY]: structuredClone(state) });
   }
 
-  async getPending(): Promise<HandoffRecord | undefined> {
+  async getPending(expectedId?: string): Promise<HandoffRecord | undefined> {
     const state = await this.load();
-    return state.pending ? structuredClone(state.pending) : undefined;
+    if (!state.pending || (expectedId !== undefined && state.pending.id !== expectedId)) return undefined;
+    return structuredClone(state.pending);
   }
 
   async getConsumed(): Promise<ConsumedHandoff[]> {
